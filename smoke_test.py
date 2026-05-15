@@ -365,28 +365,36 @@ def main() -> int:
         p_g.insert_text((50, 60), "MOVE_ME", fontsize=14)
         d_g.save(ghost_pdf)
         d_g.close()
-        # New design: cover_rect paints a white box but does NOT remove
-        # text from the content stream (avoids killing neighbours and
-        # interfering with the extract-original-font flow).  Instead,
-        # the editor tracks "logically covered" rects on PdfDocument
-        # and list_all_spans filters by that list.
+        # cover_rect should actually remove the original glyphs from
+        # the content stream, not just paint over them.  Verify via
+        # raw get_text("text") (NO covered_rects filter — this is the
+        # ground-truth from PyMuPDF's parser).
         d_g = fitz.open(ghost_pdf)
         page_g = d_g[0]
         span_g = [s for s in list_all_spans(page_g) if "MOVE_ME" in s.text][0]
+        old_x = span_g.rect.x0
         new_r = fitz.Rect(200, 200, 200 + span_g.rect.width,
                           200 + span_g.rect.height)
         move_text_span(page_g, span_g, new_r)
-        # Pass the covered rect explicitly (this is what EditController
-        # would have stashed via doc.mark_covered after the move).
-        covered = [span_g.rect]
-        spans_after = list_all_spans(page_g, covered_rects=covered)
-        old_pos_hits = [s for s in spans_after
-                         if "MOVE_ME" in s.text and abs(s.rect.x0 - span_g.rect.x0) < 5]
-        assert not old_pos_hits, f"原位置仍残留: {old_pos_hits}"
-        new_pos_hits = [s for s in spans_after
+        # No covered_rects filter — test that redaction actually
+        # removed the original glyphs.
+        spans_raw = list_all_spans(page_g)
+        old_pos_hits = [s for s in spans_raw
+                         if "MOVE_ME" in s.text and abs(s.rect.x0 - old_x) < 5]
+        assert not old_pos_hits, (
+            f"原位置仍残留（内容流没真删）: {old_pos_hits}"
+        )
+        new_pos_hits = [s for s in spans_raw
                          if "MOVE_ME" in s.text and abs(s.rect.x0 - 200) < 30]
         assert new_pos_hits, "moved text not found at new position"
-        print("[smoke] move_text_span 原位置被逻辑过滤: OK")
+        # Also check the full page text — the literal "MOVE_ME" should
+        # only appear ONCE (at the new position).
+        page_text = page_g.get_text("text")
+        assert page_text.count("MOVE_ME") == 1, (
+            f"MOVE_ME appears {page_text.count('MOVE_ME')} times in page "
+            f"text after move (expected 1): {page_text!r}"
+        )
+        print("[smoke] move_text_span: 原位置已从内容流真删除 OK")
         d_g.close()
 
         # Font registry should enumerate base-14 plus app/fonts/*

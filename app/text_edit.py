@@ -438,35 +438,82 @@ def map_to_base14(span: TextSpan) -> str:
 def cover_rect(page: fitz.Page, rect: fitz.Rect,
                 color: tuple[float, float, float] = (1.0, 1.0, 1.0),
                 pad: float = 0.0) -> None:
-    """Visually hide `rect` by painting a solid rectangle on top.
+    """Truly remove the text inside `rect` from the page content stream.
 
-    Crucially this does NOT call apply_redactions — that was the
-    cause of three regressions reported by the user:
-      • dragging one span removed an adjacent one whose glyph centres
-        happened to land inside the redaction rectangle,
-      • underlines / table rules under the span were redacted away,
-      • the extracted original-font code path got bypassed when
-        redaction silently failed and the CJK auto-fallback (YaHei)
-        took over.
+    Uses `apply_redactions` with the most conservative settings:
 
-    Drawing a filled rect is bullet-proof: it can't remove anything
-    from the content stream, can't damage graphics that aren't
-    directly under the rect, and can't change PyMuPDF's font
-    accounting.  The trade-off is that the original glyphs are
-    still PRESENT in the file's content stream — we keep an
-    in-memory list of "logically covered" rects on PdfDocument and
-    filter list_all_spans by it so the user doesn't see ghost
-    overlays.
+      * **pad=0** — exact span bbox, no encroachment into neighbours.
+      * **text=0 (default)** — center-based char removal: a glyph is
+        only deleted if its CENTRE lies inside the redaction rect,
+        so an adjacent span whose centre is even a fraction of a
+        point outside the rect survives untouched.
+      * **graphics=0** — vector drawings (underlines, table rules,
+        signatures…) are left alone.
+      * **images=0** — raster images are left alone.
+
+    Any pre-existing redaction annotations the user had marked are
+    stashed first and re-added afterwards, so this only commits OUR
+    redaction.  On any error we fall back to `draw_rect` overpaint
+    (and PdfDocument's covered_rects tracking acts as a safety net
+    for the overlay).
     """
+    r = fitz.Rect(rect)
     if pad:
-        r = fitz.Rect(rect.x0 - pad, rect.y0 - pad,
-                      rect.x1 + pad, rect.y1 + pad)
-    else:
-        r = fitz.Rect(rect)
+        r = fitz.Rect(r.x0 - pad, r.y0 - pad, r.x1 + pad, r.y1 + pad)
+
+    # Stash any pre-existing redact annotations the user had marked
+    # (via the redact tool) so apply_redactions only touches ours.
+    stash: list[dict] = []
     try:
-        page.draw_rect(r, color=None, fill=color, overlay=True)
+        annots = list(page.annots() or [])
+    except Exception:
+        annots = []
+    for annot in annots:
+        try:
+            t = annot.type
+        except Exception:
+            continue
+        if t and t[0] == fitz.PDF_ANNOT_REDACT:
+            try:
+                fill = dict(annot.colors or {}).get("fill")
+            except Exception:
+                fill = None
+            stash.append({"rect": fitz.Rect(annot.rect), "fill": fill})
+            try:
+                page.delete_annot(annot)
+            except Exception:
+                pass
+
+    redacted = False
+    try:
+        # fill=None → don't paint a coloured box over the area; we
+        # only want the text removed, so any drawings underneath
+        # (page background colour, table lines, etc.) stay visible.
+        page.add_redact_annot(r, fill=None)
+        try:
+            page.apply_redactions(images=0, graphics=0)
+        except TypeError:
+            # Older PyMuPDF without the per-kind flags.
+            page.apply_redactions()
+        redacted = True
     except Exception:
         pass
+
+    if not redacted:
+        # Last-resort visual overpaint.  The original glyphs survive
+        # in the stream but are hidden; PdfDocument's covered_rects
+        # tracking still filters them from the editable overlay.
+        try:
+            page.draw_rect(r, color=None, fill=color, overlay=True)
+        except Exception:
+            pass
+
+    # Re-add the stashed redactions so the user's pending marks survive.
+    for s in stash:
+        try:
+            page.add_redact_annot(s["rect"], fill=s["fill"] or (0, 0, 0))
+        except Exception:
+            pass
 
 
 def replace_span(page: fitz.Page, span: TextSpan, new_text: str, *,
