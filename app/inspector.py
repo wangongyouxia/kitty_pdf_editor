@@ -5,14 +5,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
-    QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,

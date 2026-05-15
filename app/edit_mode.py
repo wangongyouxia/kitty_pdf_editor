@@ -22,7 +22,7 @@ from typing import Optional
 import fitz
 from PyQt6.QtCore import QEvent, QObject, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import (
-    QBrush, QColor, QCursor, QFont, QKeyEvent, QPainter, QPen,
+    QBrush, QColor, QFont, QKeyEvent, QPainter, QPen,
 )
 from PyQt6.QtWidgets import (
     QGraphicsItem,
