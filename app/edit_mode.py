@@ -577,6 +577,18 @@ class EditController(QObject):
             it = ImageElementItem(self, page_item, img)
             self.viewer._scene.addItem(it)
             items.append(it)
+        # Z-order by inverse area: smaller elements sit ON TOP so the
+        # user can still click them when they overlap a bigger one
+        # (e.g. a footnote span nested inside a paragraph span, or a
+        # signature image dropped over text).  Range [5.0 … 5.999].
+        if items:
+            areas = []
+            for it in items:
+                r = it.original_pdf_rect
+                areas.append(max(1.0, r.width * r.height))
+            biggest = max(areas) or 1.0
+            for it, a in zip(items, areas):
+                it.setZValue(5.0 + 0.999 * (1.0 - a / biggest))
         self._items_per_page[page_index] = items
 
     def refresh_page(self, page_index: int) -> None:

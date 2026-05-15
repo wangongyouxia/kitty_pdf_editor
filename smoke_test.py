@@ -299,6 +299,33 @@ def main() -> int:
         assert not ghosts, f"ghost overlay at old position: {ghosts}"
         print("[smoke] end-to-end drag: covered_rects filters ghost: OK")
 
+        # Overlapping element selection: build a doc with two text
+        # spans whose bboxes overlap, verify they get distinct Z-values
+        # (smaller on top) so the user can reach the smaller one with
+        # a regular click and use Alt+Click to cycle.
+        overlap_pdf = os.path.join(tmp, "overlap.pdf")
+        d_o = fitz.open()
+        p_o = d_o.new_page(width=400, height=200)
+        # Big paragraph-style span behind, tiny in-line span on top.
+        p_o.insert_text((40, 80), "Long paragraph of text here.", fontsize=14)
+        p_o.insert_text((100, 80), "X", fontsize=10)
+        d_o.save(overlap_pdf)
+        d_o.close()
+        win.doc.open(overlap_pdf)
+        items_o = win.viewer.edit_controller._items_per_page.get(0, [])
+        if len(items_o) >= 2:
+            # Sort by Z descending: the smallest should be highest.
+            sorted_by_z = sorted(items_o, key=lambda it: it.zValue(), reverse=True)
+            top, *_, bottom = sorted_by_z
+            top_area = top.original_pdf_rect.width * top.original_pdf_rect.height
+            bot_area = bottom.original_pdf_rect.width * bottom.original_pdf_rect.height
+            assert top_area <= bot_area, (
+                f"smaller element should be on top: top_area={top_area}, "
+                f"bot_area={bot_area}"
+            )
+            print(f"[smoke] overlapping z-order (small on top): OK"
+                  f"  (areas {top_area:.0f} ≤ {bot_area:.0f})")
+
         # Moving one text element must NOT delete a nearby element whose
         # bbox merely touches the redaction rect.
         from app.text_edit import (

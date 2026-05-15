@@ -448,7 +448,46 @@ class PdfView(QGraphicsView):
         self._press_page_pt = page_pt
         self.pageClicked.emit(idx)
 
+        # Alt+Click while in edit mode cycles through the stack of
+        # ElementItems sitting under the cursor — lets you reach a
+        # span that's hidden behind another element.
+        if (self.edit_controller.is_active()
+                and event.modifiers() & Qt.KeyboardModifier.AltModifier):
+            from .edit_mode import ElementItem
+            stack = [it for it in self._scene.items(scene_pt)
+                     if isinstance(it, ElementItem)]
+            if stack:
+                # Find the currently-selected element in the stack and
+                # advance to the next one; if nothing was selected
+                # here, take the topmost.
+                current = next((it for it in stack if it.isSelected()), None)
+                if current is not None and len(stack) > 1:
+                    next_idx = (stack.index(current) + 1) % len(stack)
+                    target = stack[next_idx]
+                else:
+                    target = stack[0]
+                for it in stack:
+                    it.setSelected(False)
+                target.setSelected(True)
+                self.statusMessage.emit(
+                    f"已选中第 {stack.index(target) + 1} / {len(stack)} 个元素"
+                    f"（Alt+点击切换）"
+                )
+                event.accept()
+                return
+
         if tool == Tool.SELECT or tool == Tool.HAND:
+            # Hint the user when they're clicking somewhere that has
+            # multiple overlapping edit-mode elements.
+            if self.edit_controller.is_active():
+                from .edit_mode import ElementItem
+                stack = [it for it in self._scene.items(scene_pt)
+                         if isinstance(it, ElementItem)]
+                if len(stack) >= 2:
+                    self.statusMessage.emit(
+                        f"此处共有 {len(stack)} 个重叠元素，"
+                        f"按住 Alt 再点击可切换选择"
+                    )
             super().mousePressEvent(event)
             return
         if tool == Tool.INK:
