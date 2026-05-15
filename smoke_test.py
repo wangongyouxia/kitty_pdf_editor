@@ -150,6 +150,33 @@ def main() -> int:
         assert annot_count >= 6, f"expected >=6 annotations, got {annot_count}"
         print(f"[smoke] annotations: OK ({annot_count} written)")
 
+        # Moving one text element must NOT delete a nearby element whose
+        # bbox merely touches the redaction rect.
+        from app.text_edit import (
+            find_unicode_font, list_all_spans, move_text_span,
+            needs_unicode_font, safe_insert_text,
+        )
+        neighbour_pdf = os.path.join(tmp, "neighbour.pdf")
+        d_n = fitz.open()
+        p_n = d_n.new_page(width=400, height=200)
+        p_n.insert_text((50, 100), "AAA", fontsize=14)
+        # Place BBB just to the right of AAA — bboxes will share an edge.
+        p_n.insert_text((100, 100), "BBB", fontsize=14)
+        d_n.save(neighbour_pdf)
+        d_n.close()
+        d_n = fitz.open(neighbour_pdf)
+        page_n = d_n[0]
+        spans_n = list_all_spans(page_n)
+        a_span = next(s for s in spans_n if s.text == "AAA")
+        move_text_span(page_n, a_span,
+                       fitz.Rect(200, 50, 200 + a_span.rect.width,
+                                  50 + a_span.rect.height))
+        text_after = page_n.get_text("text")
+        assert "BBB" in text_after, f"neighbour deleted! get_text={text_after!r}"
+        assert "AAA" in text_after, "moved text not present"
+        print("[smoke] move preserves adjacent element: OK")
+        d_n.close()
+
         # ---- move_text_span MUST truly remove the original text from the
         # content stream (otherwise the ghost still shows after a drag).
         from app.text_edit import (
@@ -188,6 +215,22 @@ def main() -> int:
         assert len(registry) >= 12, "base-14 missing"
         if bundled:
             print(f"[smoke] bundled fonts: {[b.display for b in bundled]}")
+
+        # CJK heuristic: an unrecognised but obviously-CJK PSName
+        # should NOT fall to Helvetica — it should land on a bundled
+        # CJK face.  Names tested are real font filenames seen in the
+        # wild.
+        from app.font_registry import _looks_cjk, _normalise_font_name
+        for psname in ("NotoSansCJKsc-Regular", "PingFangSC-Regular",
+                       "SourceHanSansSC-Bold", "宋体"):
+            norm = _normalise_font_name(psname)
+            assert _looks_cjk(psname, norm), f"{psname!r} should look CJK"
+            k = pick_default_for_span(psname, bold=False, italic=False)
+            fdef = get_font(k)
+            assert fdef and fdef.is_bundled and fdef.cjk, (
+                f"CJK fallback failed for {psname!r}: key={k}"
+            )
+        print("[smoke] CJK heuristic default: OK")
 
         # Inspector default-font matching: real-world span PSNames
         # like 'ABCDEF+SimSun' MUST map to a bundled CJK font, not to

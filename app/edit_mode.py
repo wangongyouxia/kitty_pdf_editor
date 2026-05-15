@@ -589,12 +589,25 @@ class EditController(QObject):
     # ------------------------------------------------------------------
     # Commits — called by the items themselves
     # ------------------------------------------------------------------
+    def _resolve_span_font(self, span):
+        """Resolve a span's original font name to a registry entry."""
+        from .font_registry import get_font, pick_default_for_span
+        key = pick_default_for_span(span.font, bold=span.is_bold,
+                                     italic=span.is_italic)
+        fdef = get_font(key)
+        font_file = fdef.file if (fdef and fdef.is_bundled) else None
+        alias = fdef.base14_alias if fdef and fdef.base14_alias else "helv"
+        return alias, font_file
+
     def commit_text_move(self, item: TextElementItem, new_rect: fitz.Rect) -> None:
         doc = self.viewer.doc
         page = doc.page(item.span.page_index)
         bg = sample_background_color(page, item.span.rect)
+        alias, font_file = self._resolve_span_font(item.span)
         doc.push_undo()
-        move_text_span(page, item.span, new_rect, background=bg)
+        move_text_span(page, item.span, new_rect,
+                       font_alias=alias, font_file=font_file,
+                       background=bg)
         doc.mark_dirty()
         doc.pageContentChanged.emit(item.span.page_index)
         self.refresh_page(item.span.page_index)
@@ -615,20 +628,10 @@ class EditController(QObject):
         self.refresh_page(item.span.page_index)
 
     def commit_text_replace(self, item: TextElementItem, new_text: str) -> None:
-        """Replace text content keeping the original style.
-
-        Resolve the span's original font name to a registry entry so
-        the re-inserted text uses the SAME font as the user saw, not a
-        Helvetica fallback.
-        """
-        from .font_registry import get_font, pick_default_for_span
+        """Replace text content keeping the original style."""
         from .text_edit import replace_span
         span = item.span
-        key = pick_default_for_span(span.font, bold=span.is_bold,
-                                     italic=span.is_italic)
-        fdef = get_font(key)
-        font_file = fdef.file if (fdef and fdef.is_bundled) else None
-        alias = (fdef.base14_alias if fdef and fdef.base14_alias else "helv")
+        alias, font_file = self._resolve_span_font(span)
         doc = self.viewer.doc
         page = doc.page(span.page_index)
         bg = sample_background_color(page, span.rect)

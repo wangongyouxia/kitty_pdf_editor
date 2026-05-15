@@ -395,19 +395,28 @@ def map_to_base14(span: TextSpan) -> str:
 
 def cover_rect(page: fitz.Page, rect: fitz.Rect,
                 color: tuple[float, float, float] = (1.0, 1.0, 1.0),
-                pad: float = 1.5) -> None:
-    """Truly remove anything inside `rect` from the page content stream.
+                pad: float = 0.0) -> None:
+    """Remove only the text inside `rect`, keep graphics underneath.
 
-    Implementation: drops a redaction annotation over `rect` and applies
-    redactions immediately so the original text/image *operators* are
-    erased — not merely overpainted.  Any pre-existing redaction
-    annotations the user had marked are stashed and restored, so this
-    only commits OUR redaction.
+    `apply_redactions(text=2, images=0, graphics=0)` deletes the text
+    operators bounded by the redaction rect but leaves vector drawings
+    (underlines, table rules, borders) and raster images intact.
 
-    Falls back to a plain filled draw_rect when redaction is not
-    available for whatever reason.
+    The default `pad=0` keeps the rect tight against the span's bbox
+    so we don't accidentally redact a neighbouring span whose bbox
+    touches ours — that was the cause of "moving one element deletes
+    another".
+
+    Any pre-existing redaction annotations the user had marked are
+    stashed and restored so this only commits OUR redaction.
+
+    Falls back to a plain filled draw_rect on any error.
     """
-    r = fitz.Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad)
+    if pad:
+        r = fitz.Rect(rect.x0 - pad, rect.y0 - pad,
+                      rect.x1 + pad, rect.y1 + pad)
+    else:
+        r = fitz.Rect(rect)
 
     # Stash any pre-existing redact annotations so apply_redactions
     # only touches ours.
@@ -434,11 +443,30 @@ def cover_rect(page: fitz.Page, rect: fitz.Rect,
 
     redacted = False
     try:
-        page.add_redact_annot(r, fill=color)
-        page.apply_redactions()
+        # `fill=None` skips the white box — we only want the text
+        # removed; the page's other vector drawings underneath stay
+        # visible.
+        page.add_redact_annot(r, fill=None)
+        # PyMuPDF semantics (counter-intuitive):
+        #   text     = 0  → REMOVE (default)
+        #   text     = 1  → keep
+        #   graphics = 0  → keep vector drawings (preserves underlines, rules)
+        #   images   = 0  → keep raster images
+        page.apply_redactions(images=0, graphics=0)
         redacted = True
+    except TypeError:
+        # Older PyMuPDF without the per-kind flags.
+        try:
+            page.add_redact_annot(r, fill=None)
+            page.apply_redactions()
+            redacted = True
+        except Exception:
+            pass
     except Exception:
-        # Fall back to plain overpaint.
+        pass
+
+    if not redacted:
+        # Last-resort visual overpaint with the requested colour.
         try:
             page.draw_rect(r, color=None, fill=color, overlay=True)
         except Exception:
@@ -575,6 +603,7 @@ def delete_text_span(page: fitz.Page, span: TextSpan,
 
 def move_text_span(page: fitz.Page, span: TextSpan, new_rect: fitz.Rect, *,
                    font_alias: Optional[str] = None,
+                   font_file: Optional[str] = None,
                    font_size: Optional[float] = None,
                    text_color: Optional[tuple[float, float, float]] = None,
                    background: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
@@ -584,7 +613,7 @@ def move_text_span(page: fitz.Page, span: TextSpan, new_rect: fitz.Rect, *,
     not given.  Origin (baseline) is re-computed by preserving the
     relative offset within the original rect.
     """
-    cover_rect(page, span.rect, color=background, pad=0.5)
+    cover_rect(page, span.rect, color=background)
     orig_w = max(span.rect.width, 0.01)
     orig_h = max(span.rect.height, 0.01)
     new_w = max(new_rect.width, 0.01)
@@ -602,7 +631,8 @@ def move_text_span(page: fitz.Page, span: TextSpan, new_rect: fitz.Rect, *,
     alias = font_alias or map_to_base14(span)
     color = text_color if text_color is not None else span.color_rgb
     safe_insert_text(page, new_origin, span.text,
-                     fontsize=size, font_alias=alias, color=color)
+                     fontsize=size, font_alias=alias, color=color,
+                     font_file=font_file)
 
 
 def sample_background_color(page: fitz.Page, near: fitz.Rect,

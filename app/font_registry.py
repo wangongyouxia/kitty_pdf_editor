@@ -216,14 +216,60 @@ def _normalise_font_name(name: str) -> str:
     return n
 
 
+# Tokens that strongly suggest a Chinese / Japanese / Korean font even
+# when the exact PSName isn't in our alias table.  Used as a last-ditch
+# fallback so the inspector doesn't default to Helvetica for spans that
+# clearly want a CJK face.
+_CJK_NAME_HINTS: tuple[str, ...] = (
+    "yahei", "yahei", "simsun", "simhei", "simkai", "simfang",
+    "songti", "heiti", "kaiti", "fangsong", "youyuan", "lisu",
+    "stxihei", "stsong", "stkaiti", "stzhongs", "stfangso",
+    "mingliu", "pmingliu", "msmincho", "msgothic",
+    "pingfang", "hiraginosans", "hiraginomincho",
+    "noto", "sourcehansans", "sourcehanserif", "sourcehan",
+    "wenquanyi", "wqy", "droidsansfallback",
+    "han", "ming", "gothic", "mincho", "gb2312", "gb18030",
+    "cjk",
+)
+
+
+def _looks_cjk(name: str, norm: str) -> bool:
+    """Heuristic: does the original PSName clearly want a CJK font?"""
+    if any(h in norm for h in _CJK_NAME_HINTS):
+        return True
+    # Any actual CJK codepoint in the raw name (e.g. '宋体').
+    for c in (name or ""):
+        cp = ord(c)
+        if 0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF:
+            return True
+    return False
+
+
+def _first_bundled_cjk(*, bold: bool) -> Optional[str]:
+    """Return the key of the first bundled CJK font matching bold-ness,
+    falling back to any bundled CJK face.
+    """
+    candidates = [f for f in list_fonts() if f.is_bundled and f.cjk and f.file]
+    if not candidates:
+        return None
+    for f in candidates:
+        if f.bold == bold:
+            return f.key
+    return candidates[0].key
+
+
 def pick_default_for_span(span_font_name: str, *, bold: bool, italic: bool) -> str:
     """Map a detected span font name to a registry key.
 
-    Two passes over bundled fonts: first one that matches both name
-    and bold-ness, then one that only matches the name.  Falls through
-    to a base-14 mapping by family hints if nothing matches.
+    Pass 1: bundled match with bold-ness aligned (e.g. msyhbd for bold).
+    Pass 2: bundled match ignoring bold-ness.
+    Pass 3: CJK heuristic — if the name looks Chinese / Japanese /
+            Korean, default to a bundled CJK face rather than dropping
+            to Helvetica.
+    Pass 4: legacy base-14 family mapping.
     """
     norm = _normalise_font_name(span_font_name)
+
     bundled = [f for f in list_fonts() if f.is_bundled and f.file]
     for require_bold_match in (True, False):
         for f in bundled:
@@ -235,12 +281,17 @@ def pick_default_for_span(span_font_name: str, *, bold: bool, italic: bool) -> s
                 continue
             return f.key
 
+    if _looks_cjk(span_font_name or "", norm):
+        cjk_key = _first_bundled_cjk(bold=bold)
+        if cjk_key is not None:
+            return cjk_key
+
     # Base-14 fallback.
     mono = any(s in norm for s in ("mono", "courier", "consol", "code"))
     serif = (
         not mono and any(s in norm for s in (
             "serif", "times", "roman", "georgia", "garamond",
-            "minion", "cambria", "palatino", "song", "ming",
+            "minion", "cambria", "palatino",
         ))
     )
     if mono:
