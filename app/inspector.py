@@ -21,7 +21,8 @@ from PyQt6.QtWidgets import (
 from .dialogs import color_picker_button
 from .edit_mode import ImageElementItem, TextElementItem
 from .font_registry import (
-    FontDef, get_font, list_fonts, pick_default_for_span,
+    FontDef, get_font, list_fonts,
+    pick_default_for_span_aware as pick_default_for_span,
 )
 from .i18n import tr
 from .text_edit import replace_span, sample_background_color
@@ -174,9 +175,12 @@ class ElementInspectorPanel(QWidget):
         self.txt_edit.setPlainText(span.text)
         self.txt_edit.blockSignals(False)
         # Pick a sensible default in the dropdown based on the detected
-        # span font, then fall back to base-14 mapping.
+        # span font.  The "_aware" variant ALSO considers the span's
+        # text — Chinese content with an unknown PSName escalates to
+        # a bundled CJK face instead of falling to Helvetica.
         default_key = pick_default_for_span(
-            span.font, bold=span.is_bold, italic=span.is_italic,
+            span.font, span.text,
+            bold=span.is_bold, italic=span.is_italic,
         )
         idx = self.txt_font.findData(default_key)
         self.txt_font.setCurrentIndex(idx if idx >= 0 else 0)

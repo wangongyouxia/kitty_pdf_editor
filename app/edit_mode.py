@@ -590,47 +590,74 @@ class EditController(QObject):
     # Commits — called by the items themselves
     # ------------------------------------------------------------------
     def _resolve_span_font(self, span, text: Optional[str] = None):
-        """Pick a font for re-inserting `text` so it visually matches
-        the original span as closely as possible.
+        """Build the ordered font-fallback chain for re-inserting text.
 
-        Priority:
+        Returns (alias, font_files) where `font_files` is a list to be
+        tried in order by `safe_insert_text`.  The first one that
+        PyMuPDF can actually load wins, so we stack:
+
           1. The font that's *already embedded in the PDF* for this
-             span — extracted via Document.extract_font and reused
-             verbatim.  This is byte-identical to the source so the
-             result is indistinguishable from the original.  Requires
-             the font to be a TTF / OTF / TTC and cover every char in
-             `text` (subset fonts may miss newly-typed characters).
-          2. A bundled font matched by PSName (Microsoft YaHei, SimSun
-             …) via `pick_default_for_span`.
-          3. Base-14 fallback.
+             span — extracted via Document.extract_font.  For drag
+             (text unchanged) the original subset definitely covers
+             its own glyphs, so we always try this first.  For inline
+             edits with new chars we only try it if `font_supports_text`
+             confirms every codepoint is present.
+          2. A bundled font matched by PSName (Microsoft YaHei →
+             msyh.ttc, SimSun → simsun.ttc, …) via
+             `pick_default_for_span`.
+          3. If the target text contains CJK characters and the
+             bundled match was base-14, ALSO append the first bundled
+             CJK font — that way unrecognised Chinese PSNames still
+             render as Chinese instead of falling all the way to
+             Helvetica.
+          4. The base-14 alias is the very last resort (handled by
+             safe_insert_text itself, no file).
         """
-        from .font_registry import get_font, pick_default_for_span
+        from .font_registry import (
+            _first_bundled_cjk, get_font, pick_default_for_span,
+        )
         from .text_edit import extract_embedded_font, font_supports_text
         page = self.viewer.doc.page(span.page_index)
         target_text = span.text if text is None else text
+        is_drag = text is None or text == span.text
+        has_cjk = any(ord(c) > 0xFF for c in target_text)
 
+        font_files: list[str] = []
+
+        # 1. Original embedded font.
         embedded = extract_embedded_font(page, span.font)
-        if embedded and font_supports_text(embedded, target_text):
-            # The alias doesn't matter when font_file is set, but
-            # safe_insert_text still references it for its fallback
-            # path.
-            return "helv", embedded
+        if embedded:
+            # Trust the subset for drag; verify glyph coverage for edits.
+            if is_drag or font_supports_text(embedded, target_text):
+                font_files.append(embedded)
 
+        # 2. Bundled match by PSName.
         key = pick_default_for_span(span.font, bold=span.is_bold,
                                      italic=span.is_italic)
         fdef = get_font(key)
-        font_file = fdef.file if (fdef and fdef.is_bundled) else None
-        alias = fdef.base14_alias if fdef and fdef.base14_alias else "helv"
-        return alias, font_file
+        if fdef and fdef.is_bundled and fdef.file:
+            if fdef.file not in font_files:
+                font_files.append(fdef.file)
+
+        # 3. CJK escalation: ensure Chinese text never falls to Helv.
+        if has_cjk:
+            cjk_key = _first_bundled_cjk(bold=span.is_bold)
+            if cjk_key:
+                cjk_def = get_font(cjk_key)
+                if cjk_def and cjk_def.file and cjk_def.file not in font_files:
+                    font_files.append(cjk_def.file)
+
+        alias = fdef.base14_alias if (fdef and fdef.base14_alias) else "helv"
+        return alias, font_files
 
     def commit_text_move(self, item: TextElementItem, new_rect: fitz.Rect) -> None:
         doc = self.viewer.doc
         page = doc.page(item.span.page_index)
         bg = sample_background_color(page, item.span.rect)
-        alias, font_file = self._resolve_span_font(item.span)
+        alias, font_files = self._resolve_span_font(item.span)
         doc.push_undo()
         move_text_span(page, item.span, new_rect,
-                       font_alias=alias, font_file=font_file,
+                       font_alias=alias, font_files=font_files,
                        background=bg)
         doc.mark_dirty()
         doc.pageContentChanged.emit(item.span.page_index)
@@ -658,13 +685,13 @@ class EditController(QObject):
         # Pass the NEW text so the embedded-font glyph-coverage check
         # can fall back to a bundled font if the user typed characters
         # the original subset doesn't have.
-        alias, font_file = self._resolve_span_font(span, text=new_text)
+        alias, font_files = self._resolve_span_font(span, text=new_text)
         doc = self.viewer.doc
         page = doc.page(span.page_index)
         bg = sample_background_color(page, span.rect)
         doc.push_undo()
         replace_span(page, span, new_text,
-                     font_alias=alias, font_file=font_file,
+                     font_alias=alias, font_files=font_files,
                      background=bg)
         doc.mark_dirty()
         doc.pageContentChanged.emit(span.page_index)

@@ -184,15 +184,36 @@ def default_key() -> str:
 # Order inside each list does not matter; the matcher looks for any
 # substring hit (after normalising the span name).
 _FONT_NAME_ALIASES: dict[str, tuple[str, ...]] = {
-    "msyh.ttc":     ("microsoftyahei", "yahei", "msyh", "微软雅黑"),
-    "msyhbd.ttc":   ("microsoftyaheibold", "yaheibold", "msyhbd"),
-    "msyhl.ttc":    ("microsoftyaheilight", "msyhl"),
-    "simsun.ttc":   ("simsun", "songti", "宋体", "songtisc", "song"),
+    "msyh.ttc":     (
+        "microsoftyahei", "yahei", "msyh", "微软雅黑",
+        "dengxian", "等线",                        # Win 10 default Chinese
+        "microsoftjhenghei", "微软正黑",           # Trad. Chinese
+    ),
+    "msyhbd.ttc":   (
+        "microsoftyaheibold", "yaheibold", "msyhbd",
+        "dengxianbold", "microsoftjhengheibold",
+    ),
+    "msyhl.ttc":    ("microsoftyaheilight", "msyhl", "dengxianlight"),
+    "simsun.ttc":   (
+        "simsun", "songti", "宋体", "songtisc", "song",
+        "adobesongstd", "stsongstd", "newsongti",
+        "mingliu", "pmingliu", "细明体",            # Trad. equivalents
+    ),
     "simsunb.ttf":  ("simsunb", "simsunbold"),
     "nsimsun.ttf":  ("nsimsun", "newsimsun"),
-    "simhei.ttf":   ("simhei", "黑体", "heiti", "hei"),
-    "simkai.ttf":   ("simkai", "kaiti", "楷体", "stkaiti", "kai"),
-    "simfang.ttf":  ("simfang", "fangsong", "stfangsong", "仿宋", "fang"),
+    "simhei.ttf":   (
+        "simhei", "黑体", "heiti", "hei",
+        "adobeheitistd", "stxihei", "xihei",
+        "sourcehansans", "sourcehansansc",          # OK to alias — same style
+    ),
+    "simkai.ttf":   (
+        "simkai", "kaiti", "楷体", "stkaiti", "kai",
+        "adobekaitistd", "dfkai", "标楷体",
+    ),
+    "simfang.ttf":  (
+        "simfang", "fangsong", "stfangsong", "仿宋", "fang",
+        "adobefangsongstd", "fzfangsong",
+    ),
     "simli.ttf":    ("simli", "lisu", "隶书"),
     "simyou.ttf":   ("simyou", "youyuan", "幼圆"),
     "stkaiti.ttf":  ("stkaiti", "kaiti"),
@@ -221,14 +242,27 @@ def _normalise_font_name(name: str) -> str:
 # fallback so the inspector doesn't default to Helvetica for spans that
 # clearly want a CJK face.
 _CJK_NAME_HINTS: tuple[str, ...] = (
-    "yahei", "yahei", "simsun", "simhei", "simkai", "simfang",
+    # Microsoft / Windows
+    "yahei", "simsun", "simhei", "simkai", "simfang", "simli", "simyou",
+    "simsunb", "nsimsun",
     "songti", "heiti", "kaiti", "fangsong", "youyuan", "lisu",
-    "stxihei", "stsong", "stkaiti", "stzhongs", "stfangso",
-    "mingliu", "pmingliu", "msmincho", "msgothic",
-    "pingfang", "hiraginosans", "hiraginomincho",
-    "noto", "sourcehansans", "sourcehanserif", "sourcehan",
-    "wenquanyi", "wqy", "droidsansfallback",
-    "han", "ming", "gothic", "mincho", "gb2312", "gb18030",
+    "stxihei", "stsong", "stkaiti", "stzhongs", "stfangso", "stcaiyun",
+    "stxinwei", "stxingkai", "sthupo",
+    "mingliu", "pmingliu", "msjh", "msmincho", "msgothic",
+    "dengxian", "deng",
+    # macOS / iOS
+    "pingfang", "hiraginosans", "hiraginomincho", "hiraginokaku",
+    "applesdgothic", "applegothic",
+    # Cross-platform / open source
+    "noto", "sourcehansans", "sourcehanserif", "sourcehan", "shsans",
+    "wenquanyi", "wqy", "droidsansfallback", "droidsans",
+    # FangZheng / Founder (very common in Chinese publishing)
+    "fz", "founder", "fangzheng", "方正",
+    # Adobe stdfonts often seen in PDFs
+    "adobesong", "adobeheiti", "adobekaiti", "adobefangsong",
+    # Generic
+    "han", "ming", "gothic", "mincho",
+    "gb2312", "gb18030", "big5",
     "cjk",
 )
 
@@ -256,6 +290,29 @@ def _first_bundled_cjk(*, bold: bool) -> Optional[str]:
         if f.bold == bold:
             return f.key
     return candidates[0].key
+
+
+def pick_default_for_span_aware(
+    span_font_name: str, span_text: str = "",
+    *, bold: bool, italic: bool,
+) -> str:
+    """Like `pick_default_for_span` but also looks at the actual text.
+
+    When the original PSName doesn't match anything we know AND the
+    text contains CJK characters, we escalate to a bundled CJK face
+    rather than dropping to Helvetica.  Used by the Inspector so
+    Chinese spans never show "Helvetica" as their default.
+    """
+    key = pick_default_for_span(span_font_name, bold=bold, italic=italic)
+    fdef = get_font(key)
+    # If the registry match landed on a base-14 face but the span's
+    # actual text is CJK, switch to a bundled CJK font.
+    if fdef and not fdef.is_bundled and span_text:
+        if any(ord(c) > 0xFF for c in span_text):
+            cjk_key = _first_bundled_cjk(bold=bold)
+            if cjk_key:
+                return cjk_key
+    return key
 
 
 def pick_default_for_span(span_font_name: str, *, bold: bool, italic: bool) -> str:

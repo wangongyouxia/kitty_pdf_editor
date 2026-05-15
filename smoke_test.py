@@ -150,6 +150,48 @@ def main() -> int:
         assert annot_count >= 6, f"expected >=6 annotations, got {annot_count}"
         print(f"[smoke] annotations: OK ({annot_count} written)")
 
+        # _resolve_span_font must yield a CJK-capable file (not None,
+        # not base-14) for a span whose font name we DON'T recognise
+        # but whose text is clearly Chinese.  This guards against the
+        # "drag turns SimSun into Helvetica" regression.
+        from app.edit_mode import EditController
+        from app.text_edit import (
+            TextSpan, find_unicode_font, list_all_spans, move_text_span,
+            safe_insert_text,
+        )
+        unrec_pdf = os.path.join(tmp, "unrec.pdf")
+        d_u = fitz.open()
+        p_u = d_u.new_page(width=400, height=200)
+        # Use insert_text with a system font but a deliberately
+        # opaque alias so the resulting span PSName won't match our
+        # registry directly.
+        sys_fang = "C:/Windows/Fonts/simfang.ttf"
+        if os.path.isfile(sys_fang):
+            p_u.insert_text((50, 100), "测试文字段落",
+                            fontsize=14, fontname="opaque-id",
+                            fontfile=sys_fang)
+        else:
+            # Mac/Linux fallback
+            p_u.insert_text((50, 100), "测试文字段落", fontsize=14)
+        d_u.save(unrec_pdf)
+        d_u.close()
+        win.doc.open(unrec_pdf)
+        ctrl_u = win.viewer.edit_controller
+        spans_u = list_all_spans(win.doc.page(0))
+        assert spans_u, "no spans in synthetic doc"
+        target_u = spans_u[0]
+        alias, files = ctrl_u._resolve_span_font(target_u)
+        assert files, f"_resolve_span_font returned no files for {target_u.font!r}"
+        # At least one of the resolved files must be CJK-capable.
+        from app.font_registry import list_fonts as _lf
+        cjk_files = {f.file for f in _lf() if f.is_bundled and f.cjk and f.file}
+        cjk_in_chain = [p for p in files if p in cjk_files]
+        assert cjk_in_chain or any(
+            "simfang" in p.lower() or "kpdf_emb_" in p.lower() for p in files
+        ), f"no CJK font in resolve chain: {files}"
+        print(f"[smoke] unrecognised CJK PSName resolves to CJK chain: OK"
+              f" ({len(files)} candidates)")
+
         # Dragging a span MUST preserve the original embedded font.
         # Build a doc, write a span with msyh.ttc, capture the PSName
         # PyMuPDF assigns; after move_text_span the moved span should
@@ -184,14 +226,15 @@ def main() -> int:
         spans = list_all_spans(win.doc.page(0))
         target = next(s for s in spans if "测试" in s.text)
         # _resolve_span_font is what EditController uses internally.
-        alias, font_file = ctrl._resolve_span_font(target)
-        assert font_file is not None, "should resolve to a real font file"
-        # Move the span using that font file.
+        # It returns (alias, [font_files...]) — a fallback chain.
+        alias, font_files = ctrl._resolve_span_font(target)
+        assert font_files, "should resolve to at least one font file"
+        # Move the span using that font fallback chain.
         move_text_span(
             win.doc.page(0), target,
             fitz.Rect(150, 50, 150 + target.rect.width,
                       50 + target.rect.height),
-            font_alias=alias, font_file=font_file,
+            font_alias=alias, font_files=font_files,
         )
         # Re-detect the moved span; its PSName should NOT be 'Helvetica'
         # / 'MicrosoftYaHei' (the wrong fallback path).

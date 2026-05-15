@@ -161,26 +161,40 @@ def _unique_font_alias(path: str) -> str:
 def safe_insert_text(page: fitz.Page, point: fitz.Point, text: str, *,
                      fontsize: float, font_alias: str,
                      color: tuple[float, float, float],
-                     font_file: Optional[str] = None) -> None:
-    """Insert `text` honouring bold/italic from `font_alias`.
+                     font_file: Optional[str] = None,
+                     font_files: Optional[list[str]] = None) -> None:
+    """Insert `text` trying each font in `font_files` (in order) and
+    falling back through:
 
-    Priority:
-      1. If `font_file` is a real file, embed it.  This is how bundled
-         fonts (Microsoft YaHei, SimKai, …) reach the page.
-      2. Else if the text contains characters outside Latin-1, look up
-         a system Unicode-capable font and embed THAT, picking a bold
-         face when the alias asks for bold.
-      3. Else use PyMuPDF's built-in base-14 alias.
+      1. Every entry in `font_files` (plus the legacy `font_file` arg).
+         These are the "this-is-what-the-user-wanted" candidates,
+         starting with the original PDF's embedded font and ending
+         with a bundled best-match.
+      2. The system CJK font when `text` has non-Latin-1 chars.
+      3. The base-14 alias.
+
+    The new `font_files` plural is what callers should use; the
+    singular `font_file` stays for backward compatibility.
     """
     bold, italic = _alias_weights(font_alias)
-    if font_file and os.path.isfile(font_file):
+
+    candidates: list[str] = []
+    if font_files:
+        candidates.extend([p for p in font_files if p])
+    if font_file:
+        candidates.append(font_file)
+
+    for fp in candidates:
+        if not fp or not os.path.isfile(fp):
+            continue
         try:
             page.insert_text(point, text, fontsize=fontsize,
-                             fontname=_unique_font_alias(font_file),
-                             fontfile=font_file, color=color)
+                             fontname=_unique_font_alias(fp),
+                             fontfile=fp, color=color)
             return
         except Exception:
-            pass
+            continue
+
     if needs_unicode_font(text):
         path = find_unicode_font(bold=bold, italic=italic)
         if path:
@@ -207,19 +221,27 @@ def safe_insert_textbox(page: fitz.Page, rect: fitz.Rect, text: str, *,
                         rotate: int = 0,
                         fill_opacity: float = 1.0,
                         stroke_opacity: float = 1.0,
-                        font_file: Optional[str] = None) -> None:
+                        font_file: Optional[str] = None,
+                        font_files: Optional[list[str]] = None) -> None:
     bold, italic = _alias_weights(font_alias)
-    if font_file and os.path.isfile(font_file):
+    candidates: list[str] = []
+    if font_files:
+        candidates.extend([p for p in font_files if p])
+    if font_file:
+        candidates.append(font_file)
+    for fp in candidates:
+        if not fp or not os.path.isfile(fp):
+            continue
         try:
             page.insert_textbox(
                 rect, text, fontsize=fontsize,
-                fontname=_unique_font_alias(font_file), fontfile=font_file,
+                fontname=_unique_font_alias(fp), fontfile=fp,
                 color=color, align=align, rotate=rotate,
                 fill_opacity=fill_opacity, stroke_opacity=stroke_opacity,
             )
             return
         except Exception:
-            pass
+            continue
     if needs_unicode_font(text):
         path = find_unicode_font(bold=bold, italic=italic)
         if path:
@@ -483,6 +505,7 @@ def cover_rect(page: fitz.Page, rect: fitz.Rect,
 def replace_span(page: fitz.Page, span: TextSpan, new_text: str, *,
                  font_alias: Optional[str] = None,
                  font_file: Optional[str] = None,
+                 font_files: Optional[list[str]] = None,
                  font_size: Optional[float] = None,
                  text_color: Optional[tuple[float, float, float]] = None,
                  background: tuple[float, float, float] = (1.0, 1.0, 1.0),
@@ -496,7 +519,7 @@ def replace_span(page: fitz.Page, span: TextSpan, new_text: str, *,
     color = text_color if text_color is not None else span.color_rgb
     safe_insert_text(page, span.origin, new_text,
                      fontsize=size, font_alias=alias, color=color,
-                     font_file=font_file)
+                     font_file=font_file, font_files=font_files)
 
 
 def list_all_spans(page: fitz.Page) -> list[TextSpan]:
@@ -604,6 +627,7 @@ def delete_text_span(page: fitz.Page, span: TextSpan,
 def move_text_span(page: fitz.Page, span: TextSpan, new_rect: fitz.Rect, *,
                    font_alias: Optional[str] = None,
                    font_file: Optional[str] = None,
+                   font_files: Optional[list[str]] = None,
                    font_size: Optional[float] = None,
                    text_color: Optional[tuple[float, float, float]] = None,
                    background: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
@@ -632,7 +656,7 @@ def move_text_span(page: fitz.Page, span: TextSpan, new_rect: fitz.Rect, *,
     color = text_color if text_color is not None else span.color_rgb
     safe_insert_text(page, new_origin, span.text,
                      fontsize=size, font_alias=alias, color=color,
-                     font_file=font_file)
+                     font_file=font_file, font_files=font_files)
 
 
 # ----------------------------------------------------------------------
