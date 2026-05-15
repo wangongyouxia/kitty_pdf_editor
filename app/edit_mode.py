@@ -632,7 +632,10 @@ class EditController(QObject):
         from .font_registry import (
             _first_bundled_cjk, get_font, pick_default_for_span,
         )
-        from .text_edit import extract_embedded_font, font_supports_text
+        from .text_edit import (
+            extract_embedded_font, find_system_font_by_psname,
+            font_supports_text,
+        )
         page = self.viewer.doc.page(span.page_index)
         target_text = span.text if text is None else text
         is_drag = text is None or text == span.text
@@ -640,14 +643,21 @@ class EditController(QObject):
 
         font_files: list[str] = []
 
-        # 1. Original embedded font.
+        # 1. Original embedded font extracted from the PDF resources.
         embedded = extract_embedded_font(page, span.font)
         if embedded:
-            # Trust the subset for drag; verify glyph coverage for edits.
             if is_drag or font_supports_text(embedded, target_text):
                 font_files.append(embedded)
 
-        # 2. Bundled match by PSName.
+        # 2. The SAME font but resolved on the user's system by
+        # PSName — works for many PDFs where extract_font returns
+        # an unwrappable CFF / Type-1 binary but the font is
+        # actually installed at C:\Windows\Fonts.
+        sys_path = find_system_font_by_psname(span.font)
+        if sys_path and sys_path not in font_files:
+            font_files.append(sys_path)
+
+        # 3. Bundled font matched by PSName (SimSun → simsun.ttc …).
         key = pick_default_for_span(span.font, bold=span.is_bold,
                                      italic=span.is_italic)
         fdef = get_font(key)
@@ -655,7 +665,7 @@ class EditController(QObject):
             if fdef.file not in font_files:
                 font_files.append(fdef.file)
 
-        # 3. CJK escalation: ensure Chinese text never falls to Helv.
+        # 4. CJK escalation: ensure Chinese text never falls to Helv.
         if has_cjk:
             cjk_key = _first_bundled_cjk(bold=span.is_bold)
             if cjk_key:
@@ -667,20 +677,39 @@ class EditController(QObject):
         return alias, font_files
 
     def _report_resolved(self, span, font_files) -> None:
-        """Push a short status-bar note about which font we actually
-        used.  Lets the user verify visually whether preservation
-        worked or fell back."""
+        """Status-bar note + append to a debug log on the desktop so
+        the user can copy-paste a transcript if something still goes
+        wrong."""
+        import os as _os
         if not font_files:
-            label = f"base-14 ({alias if False else 'helv'})"
+            label = "base-14 helv"
+            chain_summary = "(empty chain → CJK auto = msyh.ttc)"
         else:
-            import os as _os
-            label = _os.path.basename(font_files[0])
-            if label.startswith("kpdf_emb_"):
-                label = f"{label}  (原嵌入字体)"
+            first = _os.path.basename(font_files[0])
+            if first.startswith("kpdf_emb_"):
+                label = f"{first}  (原嵌入字体)"
+            else:
+                label = first
+            chain_summary = " → ".join(_os.path.basename(p) for p in font_files)
         try:
             self.viewer.statusMessage.emit(
                 f"已用字体：{label}  ←  span PSName={span.font!r}"
             )
+        except Exception:
+            pass
+        # Per-session debug log (overwritten each launch via 'w' on
+        # first commit, append after that).
+        try:
+            log_dir = _os.path.expanduser("~/Desktop")
+            if not _os.path.isdir(log_dir):
+                log_dir = _os.path.expanduser("~")
+            log_path = _os.path.join(log_dir, "kitty_pdf_font_log.txt")
+            with open(log_path, "a", encoding="utf-8") as fp:
+                fp.write(
+                    f"span PSName={span.font!r}  text={span.text[:30]!r}\n"
+                    f"  chain: {chain_summary}\n"
+                    f"  used : {label}\n\n"
+                )
         except Exception:
             pass
 

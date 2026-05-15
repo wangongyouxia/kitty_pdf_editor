@@ -773,6 +773,66 @@ def extract_embedded_font(page: fitz.Page, font_psname: str) -> Optional[str]:
     return None
 
 
+_system_font_index: Optional[dict[str, str]] = None
+
+
+def _normalise_font_key(name: str) -> str:
+    """Same shape as font_registry._normalise_font_name (kept local to
+    avoid a circular import).  Strips a '+'-prefix subset marker and
+    collapses spaces / dashes / underscores."""
+    n = name or ""
+    if "+" in n:
+        n = n.split("+", 1)[1]
+    n = n.lower()
+    for ch in (" ", "-", "_", ","):
+        n = n.replace(ch, "")
+    return n
+
+
+def find_system_font_by_psname(psname: str) -> Optional[str]:
+    """Search every TTF / OTF in the system's font directories for a
+    font whose internal PSName matches `psname`.
+
+    Builds an index on first call (a few hundred files; one fitz.Font
+    parse each → low single-digit seconds on Windows the very first
+    time, ~zero after).  TTCs are skipped because fitz.Font picks
+    only the first face — checking each face would need fontTools.
+    """
+    global _system_font_index
+    if not psname:
+        return None
+    target = _normalise_font_key(psname)
+    if _system_font_index is None:
+        _system_font_index = {}
+        for fd in _candidate_font_dirs():
+            try:
+                names = os.listdir(fd)
+            except Exception:
+                continue
+            for fname in names:
+                low = fname.lower()
+                if not low.endswith((".ttf", ".otf")):
+                    continue  # skip .ttc — needs face-index iteration
+                path = os.path.join(fd, fname)
+                try:
+                    f = fitz.Font(fontfile=path)
+                except Exception:
+                    continue
+                # fitz.Font has both .name and .full_name on recent
+                # versions.  Index by both, plus the filename stem
+                # which often matches in a forgiving way.
+                for candidate in (
+                    getattr(f, "name", None),
+                    getattr(f, "full_name", None),
+                    os.path.splitext(fname)[0],
+                ):
+                    if not candidate:
+                        continue
+                    key = _normalise_font_key(candidate)
+                    _system_font_index.setdefault(key, path)
+    return _system_font_index.get(target)
+
+
 def font_supports_text(font_path: str, text: str) -> bool:
     """Whether the TTF/OTF at `font_path` has a glyph for every char
     in `text`.  Subset fonts often lack glyphs for *new* characters
