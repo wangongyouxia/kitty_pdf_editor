@@ -192,6 +192,14 @@ _FONT_NAME_ALIASES: dict[str, tuple[str, ...]] = {
     "msyhbd.ttc":   (
         "microsoftyaheibold", "yaheibold", "msyhbd",
         "dengxianbold", "microsoftjhengheibold",
+        # Also accept regular-yahei aliases — pass 1 below requires
+        # f.bold matching the span's bold-ness, so a regular YaHei span
+        # still routes to msyh.ttc.  This entry lets a bold YaHei span
+        # whose PSName lacks the literal word "bold" (because the
+        # bold-ness comes from the span flags, not the font name) still
+        # find the correct face.
+        "microsoftyahei", "yahei", "msyh",
+        "dengxian", "microsoftjhenghei",
     ),
     "msyhl.ttc":    ("microsoftyaheilight", "msyhl", "dengxianlight"),
     "simsun.ttc":   (
@@ -202,7 +210,9 @@ _FONT_NAME_ALIASES: dict[str, tuple[str, ...]] = {
     "simsunb.ttf":  ("simsunb", "simsunbold"),
     "nsimsun.ttf":  ("nsimsun", "newsimsun"),
     "simhei.ttf":   (
-        "simhei", "黑体", "heiti", "hei",
+        # NOTE: do NOT add a bare "hei" here — it would substring-match
+        # "MicrosoftYaHei" and divert bold YaHei spans away from msyhbd.
+        "simhei", "黑体", "heiti",
         "adobeheitistd", "stxihei", "xihei",
         "sourcehansans", "sourcehansansc",          # OK to alias — same style
     ),
@@ -353,32 +363,58 @@ def pick_default_for_span_aware(
 def pick_default_for_span(span_font_name: str, *, bold: bool, italic: bool) -> str:
     """Map a detected span font name to a registry key.
 
-    Pass 1: bundled match with bold-ness aligned (e.g. msyhbd for bold).
-    Pass 2: bundled match ignoring bold-ness.
-    Pass 3: CJK heuristic — if the name looks Chinese / Japanese /
-            Korean, default to a bundled CJK face rather than dropping
-            to Helvetica.
-    Pass 4: legacy base-14 family mapping.
+    Priority order (style preservation beats family preservation —
+    the user notices "my bold disappeared" much more than "my SimSun
+    became YaHei"):
+
+      Pass 1: same family AND matching bold-ness.  Perfect match.
+      Pass 2: bold span + CJK heuristic AND no bold same-family file
+              exists — escalate to any bundled bold CJK face so we
+              keep the bold style.  (E.g. bold SimSun → msyhbd.ttc
+              when we don't bundle simsunb.)
+      Pass 3: same family, ignore bold-ness.  Family preserved but
+              bold may be lost (only triggers for non-CJK or when
+              no bundled bold CJK exists).
+      Pass 4: CJK heuristic with the desired weight.
+      Pass 5: base-14 family mapping with bold/italic suffixes.
     """
     norm = _normalise_font_name(span_font_name)
 
     bundled = [f for f in list_fonts() if f.is_bundled and f.file]
-    for require_bold_match in (True, False):
-        for f in bundled:
-            base = os.path.basename(f.file).lower()
-            aliases = _FONT_NAME_ALIASES.get(base) or (os.path.splitext(base)[0],)
-            if not any(_normalise_font_name(a) in norm for a in aliases):
-                continue
-            if require_bold_match and f.bold != bold:
-                continue
+
+    def family_match(f: FontDef) -> bool:
+        base = os.path.basename(f.file).lower()
+        aliases = _FONT_NAME_ALIASES.get(base) or (os.path.splitext(base)[0],)
+        return any(_normalise_font_name(a) in norm for a in aliases)
+
+    # Pass 1: exact style + family.
+    for f in bundled:
+        if family_match(f) and f.bold == bold and f.italic == italic:
             return f.key
 
-    if _looks_cjk(span_font_name or "", norm):
+    # Pass 2: bold CJK escalation — preserve weight even if we have
+    # to swap family.  Triggered when the user's span is bold + CJK
+    # and the family-matching candidate above was regular-only.
+    looks_cjk_span = _looks_cjk(span_font_name or "", norm)
+    if bold and looks_cjk_span:
+        cjk_bold = _first_bundled_cjk(bold=True)
+        if cjk_bold:
+            cjk_def = get_font(cjk_bold)
+            if cjk_def and cjk_def.bold:
+                return cjk_bold
+
+    # Pass 3: same family, any style.
+    for f in bundled:
+        if family_match(f):
+            return f.key
+
+    # Pass 4: CJK heuristic with desired weight.
+    if looks_cjk_span:
         cjk_key = _first_bundled_cjk(bold=bold)
         if cjk_key is not None:
             return cjk_key
 
-    # Base-14 fallback.
+    # Pass 5: base-14 fallback.
     mono = any(s in norm for s in ("mono", "courier", "consol", "code"))
     serif = (
         not mono and any(s in norm for s in (

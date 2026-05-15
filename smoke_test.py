@@ -475,6 +475,123 @@ def main() -> int:
         else:
             print("[smoke] skip font-drift test (simfang.ttf not present)")
 
+        # Style-preservation regressions: editing text via replace_span
+        # (= inline editor commit) MUST keep bold / italic / colour.
+        # Before the pick_default_for_span fix, the "hei" alias on
+        # simhei.ttf greedily matched MicrosoftYa*hei*, and a bold
+        # YaHei span got resolved to simhei (a different font with
+        # bold by coincidence).  Worse, for spans where no bundled
+        # bold family existed (e.g. bold SimSun), the picker dropped
+        # bold entirely.
+        from app.text_edit import resolve_font_chain, replace_span
+        from app.font_registry import pick_default_for_span, get_font
+
+        msyhbd_path = "C:/Windows/Fonts/msyhbd.ttc"
+        if os.path.isfile(msyhbd_path):
+            # 1. Bold YaHei: PSName without 'bold', flag-driven bold.
+            #    Confirm pick_default_for_span returns msyhbd, not simhei.
+            for ps in ("MicrosoftYaHei", "MicrosoftYaHei-Bold",
+                       "ABCDEF+MicrosoftYaHei"):
+                k = pick_default_for_span(ps, bold=True, italic=False)
+                fdef = get_font(k)
+                got = os.path.basename(fdef.file).lower() if fdef and fdef.file else "?"
+                assert got == "msyhbd.ttc", (
+                    f"bold YaHei {ps!r} → expected msyhbd.ttc, got {got}"
+                )
+            # 2. Bold SimSun (no bold simsun bundled) → must escalate
+            #    to a bundled bold CJK rather than dropping bold.
+            k = pick_default_for_span("ABCDEF+SimSun", bold=True, italic=False)
+            fdef = get_font(k)
+            assert fdef and fdef.bold, (
+                f"bold SimSun should resolve to a BOLD font, got "
+                f"key={k} bold={fdef and fdef.bold}"
+            )
+
+            # 3. End-to-end: build a bold PDF, replace text via the
+            #    same chain the editor uses, verify the result is
+            #    still bold (flags has F_BOLD set when read back).
+            bold_pdf = os.path.join(tmp, "bold_replace.pdf")
+            d_bd = fitz.open()
+            p_bd = d_bd.new_page(width=400, height=200)
+            p_bd.insert_text((50, 100), "粗体原文",
+                              fontsize=14, fontfile=msyhbd_path,
+                              fontname="u-msyhbd")
+            d_bd.save(bold_pdf)
+            d_bd.close()
+            d_bd = fitz.open(bold_pdf)
+            page_bd = d_bd[0]
+            spans_bd = list_all_spans(page_bd)
+            target_bd = next(s for s in spans_bd if "粗体" in s.text)
+            assert target_bd.is_bold, "test fixture should be bold"
+            alias_bd, files_bd = resolve_font_chain(page_bd, target_bd,
+                                                     text="新内容")
+            replace_span(page_bd, target_bd, "新内容",
+                          font_alias=alias_bd, font_files=files_bd)
+            spans_bd2 = list_all_spans(page_bd)
+            new_span = next((s for s in spans_bd2 if "新内容" in s.text), None)
+            assert new_span is not None, "replaced span missing"
+            assert new_span.is_bold, (
+                f"bold was stripped after replace: font={new_span.font!r} "
+                f"flags={new_span.flags}"
+            )
+            d_bd.close()
+            print("[smoke] replace preserves bold: OK")
+
+            # 4. Colour preservation through replace.
+            col_pdf = os.path.join(tmp, "color_replace.pdf")
+            d_col = fitz.open()
+            p_col = d_col.new_page(width=400, height=200)
+            p_col.insert_text((50, 100), "Colored",
+                               fontsize=14, color=(0.8, 0.1, 0.1))
+            d_col.save(col_pdf)
+            d_col.close()
+            d_col = fitz.open(col_pdf)
+            page_col = d_col[0]
+            spans_col = list_all_spans(page_col)
+            target_col = next(s for s in spans_col if "Colored" in s.text)
+            orig_color = target_col.color_rgb
+            alias_col, files_col = resolve_font_chain(page_col, target_col,
+                                                       text="Newword")
+            replace_span(page_col, target_col, "Newword",
+                          font_alias=alias_col, font_files=files_col)
+            spans_col2 = list_all_spans(page_col)
+            new_col = next(s for s in spans_col2 if "Newword" in s.text)
+            # Colour should match within rounding noise.
+            for a, b in zip(orig_color, new_col.color_rgb):
+                assert abs(a - b) < 0.02, (
+                    f"colour drifted: orig={orig_color} new={new_col.color_rgb}"
+                )
+            d_col.close()
+            print("[smoke] replace preserves colour: OK")
+
+            # 5. MOVE preserves bold too (uses the same chain).
+            move_bold_pdf = os.path.join(tmp, "move_bold.pdf")
+            d_mb = fitz.open()
+            p_mb = d_mb.new_page(width=400, height=200)
+            p_mb.insert_text((50, 100), "粗体移动",
+                              fontsize=14, fontfile=msyhbd_path,
+                              fontname="u-mb")
+            d_mb.save(move_bold_pdf)
+            d_mb.close()
+            d_mb = fitz.open(move_bold_pdf)
+            page_mb = d_mb[0]
+            spans_mb = list_all_spans(page_mb)
+            target_mb = next(s for s in spans_mb if "粗体" in s.text)
+            assert target_mb.is_bold, "fixture should be bold"
+            alias_mb, files_mb = resolve_font_chain(page_mb, target_mb)
+            move_text_span(page_mb, target_mb,
+                            fitz.Rect(200, 50, 200 + target_mb.rect.width,
+                                       50 + target_mb.rect.height),
+                            font_alias=alias_mb, font_files=files_mb)
+            spans_mb2 = list_all_spans(page_mb)
+            moved = next(s for s in spans_mb2 if "粗体" in s.text)
+            assert moved.is_bold, (
+                f"bold was stripped after move: font={moved.font!r} "
+                f"flags={moved.flags}"
+            )
+            d_mb.close()
+            print("[smoke] move preserves bold: OK")
+
         # Overlapping element selection: build a doc with two text
         # spans whose bboxes overlap, verify they get distinct Z-values
         # (smaller on top) so the user can reach the smaller one with

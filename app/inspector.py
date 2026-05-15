@@ -210,8 +210,36 @@ class ElementInspectorPanel(QWidget):
         element: TextElementItem = self._current
         new_text = self.txt_edit.toPlainText()
         fdef = self._resolved_font()
-        alias = fdef.base14_alias or "helv"
-        font_file = fdef.file
+        # Build a fallback chain: user's chosen font first, plus a CJK
+        # safety net if the picked font doesn't cover Chinese / etc.
+        # in the new text.  Without the safety net, picking Helvetica
+        # for a span with Chinese content would silently render boxes.
+        font_files: list[str] = []
+        if fdef.file:
+            font_files.append(fdef.file)
+        has_cjk = any(ord(c) > 0xFF for c in new_text)
+        if has_cjk and not fdef.cjk:
+            from .font_registry import _first_bundled_cjk
+            cjk_key = _first_bundled_cjk(bold=fdef.bold)
+            if cjk_key:
+                cjk_def = get_font(cjk_key)
+                if cjk_def and cjk_def.file and cjk_def.file not in font_files:
+                    font_files.append(cjk_def.file)
+        # Alias = the base-14 face whose weight/style matches the
+        # chosen font.  For a bundled font this is just the last-resort
+        # fallback inside safe_insert_text, but using the matching
+        # alias means a missing font file still keeps bold / italic.
+        if fdef.base14_alias:
+            alias = fdef.base14_alias
+        else:
+            if fdef.bold and fdef.italic:
+                alias = "hebi"
+            elif fdef.bold:
+                alias = "hebo"
+            elif fdef.italic:
+                alias = "heit"
+            else:
+                alias = "helv"
         size = self.txt_size.value()
         qc = self.txt_color_state[0]
         text_color = (qc.redF(), qc.greenF(), qc.blueF())
@@ -222,7 +250,7 @@ class ElementInspectorPanel(QWidget):
         try:
             replace_span(
                 page, element.span, new_text,
-                font_alias=alias, font_file=font_file,
+                font_alias=alias, font_files=font_files,
                 font_size=size,
                 text_color=text_color, background=bg,
             )
