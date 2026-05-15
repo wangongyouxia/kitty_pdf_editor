@@ -23,8 +23,11 @@ from PyQt6.QtWidgets import (
 
 from .dialogs import color_picker_button
 from .edit_mode import ImageElementItem, TextElementItem
+from .font_registry import (
+    FontDef, get_font, list_fonts, pick_default_for_span,
+)
 from .i18n import tr
-from .text_edit import map_to_base14, replace_span, sample_background_color
+from .text_edit import replace_span, sample_background_color
 
 
 class ElementInspectorPanel(QWidget):
@@ -89,21 +92,13 @@ class ElementInspectorPanel(QWidget):
         self.txt_edit.setPlaceholderText("修改文字内容")
         f.addRow("文字：", self.txt_edit)
 
-        self.txt_family = QComboBox()
-        self.txt_family.addItem("无衬线（Helvetica）", "he")
-        self.txt_family.addItem("衬线（Times）", "ti")
-        self.txt_family.addItem("等宽（Courier）", "co")
-        f.addRow("字体：", self.txt_family)
-
-        style_row = QWidget()
-        h = QHBoxLayout(style_row)
-        h.setContentsMargins(0, 0, 0, 0)
-        self.txt_bold = QCheckBox("粗体")
-        self.txt_italic = QCheckBox("斜体")
-        h.addWidget(self.txt_bold)
-        h.addWidget(self.txt_italic)
-        h.addStretch(1)
-        f.addRow("样式：", style_row)
+        # Single dropdown listing every available font (base-14 plus
+        # everything in app/fonts/).  Each item stores the FontDef key.
+        self.txt_font = QComboBox()
+        for fdef in list_fonts():
+            self.txt_font.addItem(fdef.display, fdef.key)
+        self.txt_font.setMaxVisibleItems(20)
+        f.addRow("字体：", self.txt_font)
 
         self.txt_size = QDoubleSpinBox()
         self.txt_size.setRange(4, 400)
@@ -181,16 +176,13 @@ class ElementInspectorPanel(QWidget):
         self.txt_edit.blockSignals(True)
         self.txt_edit.setPlainText(span.text)
         self.txt_edit.blockSignals(False)
-        alias = map_to_base14(span)
-        base = alias[:2]
-        if base == "co":
-            self.txt_family.setCurrentIndex(2)
-        elif base == "ti":
-            self.txt_family.setCurrentIndex(1)
-        else:
-            self.txt_family.setCurrentIndex(0)
-        self.txt_bold.setChecked(span.is_bold)
-        self.txt_italic.setChecked(span.is_italic)
+        # Pick a sensible default in the dropdown based on the detected
+        # span font, then fall back to base-14 mapping.
+        default_key = pick_default_for_span(
+            span.font, bold=span.is_bold, italic=span.is_italic,
+        )
+        idx = self.txt_font.findData(default_key)
+        self.txt_font.setCurrentIndex(idx if idx >= 0 else 0)
         self.txt_size.setValue(float(span.size))
         r, g, b = span.color_rgb
         c = QColor(int(r * 255), int(g * 255), int(b * 255))
@@ -206,22 +198,19 @@ class ElementInspectorPanel(QWidget):
         )
         self.stack.setCurrentWidget(self.text_page)
 
-    def _build_alias(self) -> str:
-        base = self.txt_family.currentData() or "he"
-        bold = self.txt_bold.isChecked()
-        italic = self.txt_italic.isChecked()
-        if base == "he":
-            return "hebi" if bold and italic else "hebo" if bold else "heit" if italic else "helv"
-        if base == "ti":
-            return "tibi" if bold and italic else "tibo" if bold else "tiit" if italic else "tiro"
-        return "cobi" if bold and italic else "cobo" if bold else "coit" if italic else "cour"
+    def _resolved_font(self) -> FontDef:
+        key = self.txt_font.currentData()
+        f = get_font(key) if key else None
+        return f or list_fonts()[0]
 
     def _apply_text(self) -> None:
         if not isinstance(self._current, TextElementItem):
             return
         element: TextElementItem = self._current
         new_text = self.txt_edit.toPlainText()
-        alias = self._build_alias()
+        fdef = self._resolved_font()
+        alias = fdef.base14_alias or "helv"
+        font_file = fdef.file
         size = self.txt_size.value()
         qc = self.txt_color_state[0]
         text_color = (qc.redF(), qc.greenF(), qc.blueF())
@@ -232,7 +221,8 @@ class ElementInspectorPanel(QWidget):
         try:
             replace_span(
                 page, element.span, new_text,
-                font_alias=alias, font_size=size,
+                font_alias=alias, font_file=font_file,
+                font_size=size,
                 text_color=text_color, background=bg,
             )
         except Exception as exc:

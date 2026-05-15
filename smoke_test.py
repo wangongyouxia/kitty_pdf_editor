@@ -177,6 +177,16 @@ def main() -> int:
         print("[smoke] move_text_span 真删除原位置: OK")
         d_g.close()
 
+        # Font registry should enumerate base-14 plus app/fonts/*
+        from app.font_registry import list_fonts
+        registry = list_fonts(refresh=True)
+        bundled = [f for f in registry if f.is_bundled]
+        print(f"[smoke] font registry: {len(registry)} entries"
+              f" ({len(bundled)} bundled)")
+        assert len(registry) >= 12, "base-14 missing"
+        if bundled:
+            print(f"[smoke] bundled fonts: {[b.display for b in bundled]}")
+
         # CJK round-trip: move/edit Chinese text and verify chars survive
         font_path = find_unicode_font()
         assert font_path is not None, "no Unicode font found on system"

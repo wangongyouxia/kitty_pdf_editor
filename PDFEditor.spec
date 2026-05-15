@@ -7,6 +7,7 @@
 # platforms; the source is platform-agnostic, only the binary container
 # differs.
 
+import glob
 import os
 
 block_cipher = None
@@ -24,6 +25,15 @@ datas = [d for d in (
     _maybe(os.path.join("app", "cat.ico")),
     _maybe(os.path.join("app", "donate.png")),
 ) if d is not None]
+
+# Pick up every font file in app/fonts/.  The destination directory
+# inside the bundle is `app/fonts` so font_registry can find them via
+# `sys._MEIPASS/app/fonts`.
+_fonts_dir = os.path.join(HERE, "app", "fonts")
+if os.path.isdir(_fonts_dir):
+    for pattern in ("*.ttf", "*.ttc", "*.otf"):
+        for f in glob.glob(os.path.join(_fonts_dir, pattern)):
+            datas.append((f, os.path.join("app", "fonts")))
 
 
 a = Analysis(

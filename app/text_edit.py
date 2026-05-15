@@ -160,14 +160,27 @@ def _unique_font_alias(path: str) -> str:
 
 def safe_insert_text(page: fitz.Page, point: fitz.Point, text: str, *,
                      fontsize: float, font_alias: str,
-                     color: tuple[float, float, float]) -> None:
+                     color: tuple[float, float, float],
+                     font_file: Optional[str] = None) -> None:
     """Insert `text` honouring bold/italic from `font_alias`.
 
-    For CJK / non-Latin text a system Unicode font is embedded; bold
-    requests pick a Bold-face file (e.g. Microsoft YaHei Bold) when
-    available so the on-page result is actually heavier.
+    Priority:
+      1. If `font_file` is a real file, embed it.  This is how bundled
+         fonts (Microsoft YaHei, SimKai, …) reach the page.
+      2. Else if the text contains characters outside Latin-1, look up
+         a system Unicode-capable font and embed THAT, picking a bold
+         face when the alias asks for bold.
+      3. Else use PyMuPDF's built-in base-14 alias.
     """
     bold, italic = _alias_weights(font_alias)
+    if font_file and os.path.isfile(font_file):
+        try:
+            page.insert_text(point, text, fontsize=fontsize,
+                             fontname=_unique_font_alias(font_file),
+                             fontfile=font_file, color=color)
+            return
+        except Exception:
+            pass
     if needs_unicode_font(text):
         path = find_unicode_font(bold=bold, italic=italic)
         if path:
@@ -193,8 +206,20 @@ def safe_insert_textbox(page: fitz.Page, rect: fitz.Rect, text: str, *,
                         align: int = 0,
                         rotate: int = 0,
                         fill_opacity: float = 1.0,
-                        stroke_opacity: float = 1.0) -> None:
+                        stroke_opacity: float = 1.0,
+                        font_file: Optional[str] = None) -> None:
     bold, italic = _alias_weights(font_alias)
+    if font_file and os.path.isfile(font_file):
+        try:
+            page.insert_textbox(
+                rect, text, fontsize=fontsize,
+                fontname=_unique_font_alias(font_file), fontfile=font_file,
+                color=color, align=align, rotate=rotate,
+                fill_opacity=fill_opacity, stroke_opacity=stroke_opacity,
+            )
+            return
+        except Exception:
+            pass
     if needs_unicode_font(text):
         path = find_unicode_font(bold=bold, italic=italic)
         if path:
@@ -429,6 +454,7 @@ def cover_rect(page: fitz.Page, rect: fitz.Rect,
 
 def replace_span(page: fitz.Page, span: TextSpan, new_text: str, *,
                  font_alias: Optional[str] = None,
+                 font_file: Optional[str] = None,
                  font_size: Optional[float] = None,
                  text_color: Optional[tuple[float, float, float]] = None,
                  background: tuple[float, float, float] = (1.0, 1.0, 1.0),
@@ -441,7 +467,8 @@ def replace_span(page: fitz.Page, span: TextSpan, new_text: str, *,
     size = font_size if font_size is not None else span.size
     color = text_color if text_color is not None else span.color_rgb
     safe_insert_text(page, span.origin, new_text,
-                     fontsize=size, font_alias=alias, color=color)
+                     fontsize=size, font_alias=alias, color=color,
+                     font_file=font_file)
 
 
 def list_all_spans(page: fitz.Page) -> list[TextSpan]:
