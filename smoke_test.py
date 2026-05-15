@@ -409,6 +409,20 @@ def main() -> int:
         if bundled:
             print(f"[smoke] bundled fonts: {[b.display for b in bundled]}")
 
+        # Real-world regression: some Chinese PDFs store the PSName as
+        # UTF-8 bytes interpreted by PyMuPDF as Latin-1 — e.g. '仿宋'
+        # comes through as 'ä»¿å®\x8b'.  pick_default_for_span MUST
+        # still match the bundled simfang.ttf.
+        from app.font_registry import _maybe_decode_mojibake
+        mojibake = 'ä»¿å®'   # UTF-8 of '仿宋' as Latin-1
+        assert _maybe_decode_mojibake(mojibake) == '仿宋', \
+            f"mojibake decode failed: {_maybe_decode_mojibake(mojibake)!r}"
+        k = pick_default_for_span(mojibake, bold=False, italic=False)
+        fdef = get_font(k)
+        assert fdef and fdef.file and 'simfang' in os.path.basename(fdef.file).lower(), \
+            f"mojibake PSName {mojibake!r} should resolve to simfang.ttf, got {fdef and fdef.file}"
+        print("[smoke] mojibake CJK PSName (仿宋 as Latin-1) → simfang.ttf: OK")
+
         # CJK heuristic: an unrecognised but obviously-CJK PSName
         # should NOT fall to Helvetica — it should land on a bundled
         # CJK face.  Names tested are real font filenames seen in the

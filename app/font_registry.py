@@ -222,12 +222,44 @@ _FONT_NAME_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
-def _normalise_font_name(name: str) -> str:
-    """Drop the 'ABCDEF+' subset prefix PDF embedders prepend and
-    collapse whitespace / dashes so 'Microsoft YaHei-Bold' becomes
-    'microsoftyaheibold'.
+def _maybe_decode_mojibake(name: str) -> str:
+    """Some Chinese PDFs store a CJK PSName as raw UTF-8 bytes in a
+    place where PyMuPDF / the PDF spec expect a PDFDocEncoding /
+    Latin-1 string.  PyMuPDF then hands us back a string like
+    'ä»¿å®\\x8b' — those are literally the UTF-8 bytes of '仿宋'
+    re-decoded one-byte-per-char.  Detect that and recover the real
+    name so our alias table can actually find it.
     """
-    n = name or ""
+    if not name:
+        return name
+    # If the string is already plain ASCII, nothing to fix.
+    if not any(ord(c) > 0x7F for c in name):
+        return name
+    # If it already contains real CJK codepoints, nothing to fix.
+    if any(ord(c) > 0xFF for c in name):
+        return name
+    # All chars are 0x80-0xFF — could be mojibake.  Try the round-trip.
+    try:
+        as_bytes = name.encode("latin-1")
+        decoded = as_bytes.decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return name
+    # Accept the fix only if the decoded result actually contains
+    # CJK / fullwidth codepoints (so we don't mangle, say, a German
+    # PSName with umlauts).
+    for c in decoded:
+        cp = ord(c)
+        if 0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF:
+            return decoded
+    return name
+
+
+def _normalise_font_name(name: str) -> str:
+    """Drop the 'ABCDEF+' subset prefix PDF embedders prepend, recover
+    UTF-8-as-Latin-1 mojibake'd CJK names, and collapse whitespace /
+    dashes so 'Microsoft YaHei-Bold' becomes 'microsoftyaheibold'.
+    """
+    n = _maybe_decode_mojibake(name or "")
     if "+" in n:
         # PDF subset prefix: six uppercase letters + '+'.
         n = n.split("+", 1)[1]
@@ -271,11 +303,14 @@ def _looks_cjk(name: str, norm: str) -> bool:
     """Heuristic: does the original PSName clearly want a CJK font?"""
     if any(h in norm for h in _CJK_NAME_HINTS):
         return True
-    # Any actual CJK codepoint in the raw name (e.g. '宋体').
-    for c in (name or ""):
-        cp = ord(c)
-        if 0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF:
-            return True
+    # Any actual CJK codepoint in either the raw name OR the
+    # mojibake-recovered name (covers PDFs whose PSName is real CJK
+    # AND those whose PSName is mojibake'd UTF-8 of CJK).
+    for source in ((name or ""), _maybe_decode_mojibake(name or "")):
+        for c in source:
+            cp = ord(c)
+            if 0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF:
+                return True
     return False
 
 

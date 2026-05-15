@@ -715,12 +715,16 @@ def extract_embedded_font(page: fitz.Page, font_psname: str) -> Optional[str]:
         # Stale (temp got cleaned); fall through and re-extract.
 
     target = font_psname.strip()
-    target_low = target.lower()
-    # Strip the standard '+'-prefix subset marker for comparison.
-    if "+" in target:
-        bn_low = target.split("+", 1)[1].lower()
-    else:
-        bn_low = target_low
+    # Build a set of names we'll try matching against: the raw input,
+    # its mojibake-recovered form (if applicable), each with the
+    # '+'-prefix stripped.  This makes us robust against PDFs that
+    # encode CJK PSNames as UTF-8 bytes.
+    targets: set[str] = set()
+    for variant in (target, _try_decode_mojibake(target)):
+        v_low = variant.lower()
+        targets.add(v_low)
+        if "+" in variant:
+            targets.add(variant.split("+", 1)[1].lower())
 
     try:
         fonts = page.get_fonts()
@@ -735,7 +739,11 @@ def extract_embedded_font(page: fitz.Page, font_psname: str) -> Optional[str]:
             name = (fo[4] if len(fo) > 4 else "") or ""
         except Exception:
             continue
-        if name.lower() != target_low and basename.lower() != bn_low:
+        # Try both as-is and decoded for the candidate names too.
+        cand_names = {name.lower(), basename.lower(),
+                       _try_decode_mojibake(name).lower(),
+                       _try_decode_mojibake(basename).lower()}
+        if not (cand_names & targets):
             continue
         try:
             info = doc.extract_font(xref)
@@ -776,11 +784,31 @@ def extract_embedded_font(page: fitz.Page, font_psname: str) -> Optional[str]:
 _system_font_index: Optional[dict[str, str]] = None
 
 
+def _try_decode_mojibake(name: str) -> str:
+    """Recover a CJK PSName that PyMuPDF returned as UTF-8 bytes
+    interpreted byte-per-char (mojibake).  Mirror of the helper in
+    font_registry — duplicated here to avoid a circular import."""
+    if not name or not any(ord(c) > 0x7F for c in name):
+        return name
+    if any(ord(c) > 0xFF for c in name):
+        return name
+    try:
+        decoded = name.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return name
+    for c in decoded:
+        cp = ord(c)
+        if 0x3000 <= cp <= 0x9FFF or 0xFF00 <= cp <= 0xFFEF:
+            return decoded
+    return name
+
+
 def _normalise_font_key(name: str) -> str:
     """Same shape as font_registry._normalise_font_name (kept local to
-    avoid a circular import).  Strips a '+'-prefix subset marker and
-    collapses spaces / dashes / underscores."""
-    n = name or ""
+    avoid a circular import).  Strips a '+'-prefix subset marker,
+    recovers UTF-8-as-Latin-1 mojibake, and collapses spaces / dashes /
+    underscores."""
+    n = _try_decode_mojibake(name or "")
     if "+" in n:
         n = n.split("+", 1)[1]
     n = n.lower()
