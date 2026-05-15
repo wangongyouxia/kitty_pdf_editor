@@ -615,16 +615,30 @@ class EditController(QObject):
         self.refresh_page(item.span.page_index)
 
     def commit_text_replace(self, item: TextElementItem, new_text: str) -> None:
-        """Replace text content keeping the original style."""
+        """Replace text content keeping the original style.
+
+        Resolve the span's original font name to a registry entry so
+        the re-inserted text uses the SAME font as the user saw, not a
+        Helvetica fallback.
+        """
+        from .font_registry import get_font, pick_default_for_span
         from .text_edit import replace_span
+        span = item.span
+        key = pick_default_for_span(span.font, bold=span.is_bold,
+                                     italic=span.is_italic)
+        fdef = get_font(key)
+        font_file = fdef.file if (fdef and fdef.is_bundled) else None
+        alias = (fdef.base14_alias if fdef and fdef.base14_alias else "helv")
         doc = self.viewer.doc
-        page = doc.page(item.span.page_index)
-        bg = sample_background_color(page, item.span.rect)
+        page = doc.page(span.page_index)
+        bg = sample_background_color(page, span.rect)
         doc.push_undo()
-        replace_span(page, item.span, new_text, background=bg)
+        replace_span(page, span, new_text,
+                     font_alias=alias, font_file=font_file,
+                     background=bg)
         doc.mark_dirty()
-        doc.pageContentChanged.emit(item.span.page_index)
-        self.refresh_page(item.span.page_index)
+        doc.pageContentChanged.emit(span.page_index)
+        self.refresh_page(span.page_index)
 
     def commit_image_move(self, item: ImageElementItem, new_rect: fitz.Rect) -> None:
         doc = self.viewer.doc

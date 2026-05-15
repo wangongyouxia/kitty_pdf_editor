@@ -179,34 +179,76 @@ def default_key() -> str:
     return "helv"
 
 
+# Maps a *bundled file's basename* → tokens that, if present in the
+# span font's PSName, identify the user as having intended that font.
+# Order inside each list does not matter; the matcher looks for any
+# substring hit (after normalising the span name).
+_FONT_NAME_ALIASES: dict[str, tuple[str, ...]] = {
+    "msyh.ttc":     ("microsoftyahei", "yahei", "msyh", "微软雅黑"),
+    "msyhbd.ttc":   ("microsoftyaheibold", "yaheibold", "msyhbd"),
+    "msyhl.ttc":    ("microsoftyaheilight", "msyhl"),
+    "simsun.ttc":   ("simsun", "songti", "宋体", "songtisc", "song"),
+    "simsunb.ttf":  ("simsunb", "simsunbold"),
+    "nsimsun.ttf":  ("nsimsun", "newsimsun"),
+    "simhei.ttf":   ("simhei", "黑体", "heiti", "hei"),
+    "simkai.ttf":   ("simkai", "kaiti", "楷体", "stkaiti", "kai"),
+    "simfang.ttf":  ("simfang", "fangsong", "stfangsong", "仿宋", "fang"),
+    "simli.ttf":    ("simli", "lisu", "隶书"),
+    "simyou.ttf":   ("simyou", "youyuan", "幼圆"),
+    "stkaiti.ttf":  ("stkaiti", "kaiti"),
+    "stsong.ttf":   ("stsong", "songti"),
+    "stxihei.ttf":  ("stxihei", "xihei"),
+}
+
+
+def _normalise_font_name(name: str) -> str:
+    """Drop the 'ABCDEF+' subset prefix PDF embedders prepend and
+    collapse whitespace / dashes so 'Microsoft YaHei-Bold' becomes
+    'microsoftyaheibold'.
+    """
+    n = name or ""
+    if "+" in n:
+        # PDF subset prefix: six uppercase letters + '+'.
+        n = n.split("+", 1)[1]
+    n = n.lower()
+    for ch in (" ", "-", "_", ","):
+        n = n.replace(ch, "")
+    return n
+
+
 def pick_default_for_span(span_font_name: str, *, bold: bool, italic: bool) -> str:
-    """Best-effort: map a detected span font name to a registry key."""
-    lower = (span_font_name or "").lower()
-    # Try bundled match by filename hints.
-    for f in list_fonts():
-        if not f.is_bundled or not f.file:
-            continue
-        base = os.path.basename(f.file).lower()
-        stem = os.path.splitext(base)[0]
-        # Common substrings (yahei, simsun, simhei, kaiti, fangsong, song, hei…)
-        if any(tok in lower for tok in (stem, base.split(".")[0])):
-            if f.bold == bold:
-                return f.key
-    # Otherwise base-14 mapping like the legacy text_edit.map_to_base14.
-    mono = any(s in lower for s in ("mono", "courier", "consol", "code"))
+    """Map a detected span font name to a registry key.
+
+    Two passes over bundled fonts: first one that matches both name
+    and bold-ness, then one that only matches the name.  Falls through
+    to a base-14 mapping by family hints if nothing matches.
+    """
+    norm = _normalise_font_name(span_font_name)
+    bundled = [f for f in list_fonts() if f.is_bundled and f.file]
+    for require_bold_match in (True, False):
+        for f in bundled:
+            base = os.path.basename(f.file).lower()
+            aliases = _FONT_NAME_ALIASES.get(base) or (os.path.splitext(base)[0],)
+            if not any(_normalise_font_name(a) in norm for a in aliases):
+                continue
+            if require_bold_match and f.bold != bold:
+                continue
+            return f.key
+
+    # Base-14 fallback.
+    mono = any(s in norm for s in ("mono", "courier", "consol", "code"))
     serif = (
-        not mono and any(s in lower for s in (
+        not mono and any(s in norm for s in (
             "serif", "times", "roman", "georgia", "garamond",
-            "minion", "cambria", "palatino", "song",
+            "minion", "cambria", "palatino", "song", "ming",
         ))
     )
     if mono:
-        prefix = "co"
+        prefix, base_suf = "co", "ur"
     elif serif:
-        prefix = "ti"
+        prefix, base_suf = "ti", "ro"
     else:
-        prefix = "he"
-    base = "lv" if prefix == "he" else ("ro" if prefix == "ti" else "ur")
+        prefix, base_suf = "he", "lv"
     if bold and italic:
         suf = "bi"
     elif bold:
@@ -214,7 +256,7 @@ def pick_default_for_span(span_font_name: str, *, bold: bool, italic: bool) -> s
     elif italic:
         suf = "it"
     else:
-        suf = base
+        suf = base_suf
     key = prefix + suf
     if get_font(key) is not None:
         return key

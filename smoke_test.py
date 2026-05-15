@@ -178,7 +178,9 @@ def main() -> int:
         d_g.close()
 
         # Font registry should enumerate base-14 plus app/fonts/*
-        from app.font_registry import list_fonts
+        from app.font_registry import (
+            list_fonts, pick_default_for_span, get_font,
+        )
         registry = list_fonts(refresh=True)
         bundled = [f for f in registry if f.is_bundled]
         print(f"[smoke] font registry: {len(registry)} entries"
@@ -186,6 +188,35 @@ def main() -> int:
         assert len(registry) >= 12, "base-14 missing"
         if bundled:
             print(f"[smoke] bundled fonts: {[b.display for b in bundled]}")
+
+        # Inspector default-font matching: real-world span PSNames
+        # like 'ABCDEF+SimSun' MUST map to a bundled CJK font, not to
+        # Helvetica.  Run only the cases for which we actually bundled
+        # the target file (so the test scales with whatever's shipped).
+        bundled_basenames = {os.path.basename(f.file).lower()
+                              for f in bundled if f.file}
+        candidates = [
+            ("ABCDEF+SimSun",          False, "simsun.ttc"),
+            ("SimSun",                  False, "simsun.ttc"),
+            ("MicrosoftYaHei",          False, "msyh.ttc"),
+            ("Microsoft YaHei",         False, "msyh.ttc"),
+            ("MicrosoftYaHei-Bold",     True,  "msyhbd.ttc"),
+            ("Microsoft YaHei Bold",    True,  "msyhbd.ttc"),
+            ("SimHei",                  False, "simhei.ttf"),
+            ("STKaiti",                 False, "simkai.ttf"),
+        ]
+        checked = 0
+        for name, bold, want in candidates:
+            if want.lower() not in bundled_basenames:
+                continue
+            key = pick_default_for_span(name, bold=bold, italic=False)
+            fdef = get_font(key)
+            got = os.path.basename(fdef.file).lower() if fdef and fdef.file else "?"
+            assert got == want.lower(), (
+                f"font match: {name!r} bold={bold} → wanted {want}, got {got}"
+            )
+            checked += 1
+        print(f"[smoke] span-font → bundled match: OK ({checked} cases)")
 
         # CJK round-trip: move/edit Chinese text and verify chars survive
         font_path = find_unicode_font()
