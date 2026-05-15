@@ -252,6 +252,53 @@ def main() -> int:
         print("[smoke] move preserves original font (not Helvetica): OK")
         d_pres.close()
 
+        # End-to-end edit-mode move: covered_rects tracking should
+        # hide the ghost overlay after a drag, and the underlying
+        # content stream is intentionally left alone (preserves
+        # original glyph data + protects neighbouring spans).
+        e2e_pdf = os.path.join(tmp, "e2e.pdf")
+        d_e = fitz.open()
+        p_e = d_e.new_page(width=400, height=200)
+        sys_fang2 = "C:/Windows/Fonts/simfang.ttf"
+        if os.path.isfile(sys_fang2):
+            p_e.insert_text((50, 100), "拖拽测试",
+                            fontsize=14, fontname="ufang", fontfile=sys_fang2)
+        else:
+            p_e.insert_text((50, 100), "Drag me", fontsize=14)
+        d_e.save(e2e_pdf)
+        d_e.close()
+        win.doc.open(e2e_pdf)
+        assert win.viewer.edit_controller.is_active(), \
+            "edit mode should auto-enable on open"
+        # Pick the first text overlay element and "drag" it.
+        page_items = win.viewer.edit_controller._items_per_page.get(0, [])
+        from app.edit_mode import TextElementItem
+        text_elems = [e for e in page_items if isinstance(e, TextElementItem)]
+        assert text_elems, "no text overlay built"
+        target_e = text_elems[0]
+        original_rect = fitz.Rect(target_e.original_pdf_rect)
+        # Simulate move by repositioning the QGraphics item then
+        # commit_move.
+        new_x_offset = 100
+        target_e.setPos(target_e.pos().x() + new_x_offset, target_e.pos().y())
+        target_e.commit_move()
+        # PdfDocument should now have a covered rect for the old pos.
+        cov = win.doc.covered_rects(0)
+        assert cov, "doc.covered_rects(0) is empty after move"
+        assert any(abs(cr.x0 - original_rect.x0) < 1 for cr in cov), \
+            f"original rect not in covered_rects: {cov}"
+        # And the rebuilt overlay must NOT include a TextElementItem
+        # whose span sits at the original position.
+        items_after = win.viewer.edit_controller._items_per_page.get(0, [])
+        text_items_after = [e for e in items_after if isinstance(e, TextElementItem)]
+        ghosts = [
+            e for e in text_items_after
+            if abs(e.original_pdf_rect.x0 - original_rect.x0) < 1
+            and abs(e.original_pdf_rect.y0 - original_rect.y0) < 1
+        ]
+        assert not ghosts, f"ghost overlay at old position: {ghosts}"
+        print("[smoke] end-to-end drag: covered_rects filters ghost: OK")
+
         # Moving one text element must NOT delete a nearby element whose
         # bbox merely touches the redaction rect.
         from app.text_edit import (
@@ -291,19 +338,28 @@ def main() -> int:
         p_g.insert_text((50, 60), "MOVE_ME", fontsize=14)
         d_g.save(ghost_pdf)
         d_g.close()
+        # New design: cover_rect paints a white box but does NOT remove
+        # text from the content stream (avoids killing neighbours and
+        # interfering with the extract-original-font flow).  Instead,
+        # the editor tracks "logically covered" rects on PdfDocument
+        # and list_all_spans filters by that list.
         d_g = fitz.open(ghost_pdf)
         page_g = d_g[0]
         span_g = [s for s in list_all_spans(page_g) if "MOVE_ME" in s.text][0]
-        new_r = fitz.Rect(200, 200, 200 + span_g.rect.width, 200 + span_g.rect.height)
+        new_r = fitz.Rect(200, 200, 200 + span_g.rect.width,
+                          200 + span_g.rect.height)
         move_text_span(page_g, span_g, new_r)
-        spans_after = list_all_spans(page_g)
+        # Pass the covered rect explicitly (this is what EditController
+        # would have stashed via doc.mark_covered after the move).
+        covered = [span_g.rect]
+        spans_after = list_all_spans(page_g, covered_rects=covered)
         old_pos_hits = [s for s in spans_after
                          if "MOVE_ME" in s.text and abs(s.rect.x0 - span_g.rect.x0) < 5]
         assert not old_pos_hits, f"原位置仍残留: {old_pos_hits}"
         new_pos_hits = [s for s in spans_after
                          if "MOVE_ME" in s.text and abs(s.rect.x0 - 200) < 30]
         assert new_pos_hits, "moved text not found at new position"
-        print("[smoke] move_text_span 真删除原位置: OK")
+        print("[smoke] move_text_span 原位置被逻辑过滤: OK")
         d_g.close()
 
         # Font registry should enumerate base-14 plus app/fonts/*

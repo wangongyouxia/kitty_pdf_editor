@@ -330,7 +330,25 @@ def _int_color_to_rgb(value) -> tuple[float, float, float]:
             (v & 0xFF) / 255.0)
 
 
-def find_text_span_at(page: fitz.Page, point: fitz.Point) -> Optional[TextSpan]:
+def _is_covered(rect: fitz.Rect, covered_rects) -> bool:
+    """Returns True if `rect` is "logically deleted" — i.e. its centre
+    lies inside one of the covered rectangles the editor has stamped
+    on this page during the session.  Using the rect centre (rather
+    than full containment or intersection) gives forgiving behaviour
+    when bboxes drift slightly between operations.
+    """
+    if not covered_rects:
+        return False
+    cx = (rect.x0 + rect.x1) / 2.0
+    cy = (rect.y0 + rect.y1) / 2.0
+    for cr in covered_rects:
+        if cr.x0 <= cx <= cr.x1 and cr.y0 <= cy <= cr.y1:
+            return True
+    return False
+
+
+def find_text_span_at(page: fitz.Page, point: fitz.Point,
+                      covered_rects=None) -> Optional[TextSpan]:
     """Return the text span that contains `point`, or None."""
     data = page.get_text("dict")
     best: Optional[TextSpan] = None
@@ -348,6 +366,8 @@ def find_text_span_at(page: fitz.Page, point: fitz.Point) -> Optional[TextSpan]:
                     continue
                 rect = fitz.Rect(bbox)
                 if not rect.contains(point):
+                    continue
+                if _is_covered(rect, covered_rects):
                     continue
                 area = max(1.0, rect.get_area())
                 if area >= best_area:
@@ -418,88 +438,35 @@ def map_to_base14(span: TextSpan) -> str:
 def cover_rect(page: fitz.Page, rect: fitz.Rect,
                 color: tuple[float, float, float] = (1.0, 1.0, 1.0),
                 pad: float = 0.0) -> None:
-    """Remove only the text inside `rect`, keep graphics underneath.
+    """Visually hide `rect` by painting a solid rectangle on top.
 
-    `apply_redactions(text=2, images=0, graphics=0)` deletes the text
-    operators bounded by the redaction rect but leaves vector drawings
-    (underlines, table rules, borders) and raster images intact.
+    Crucially this does NOT call apply_redactions — that was the
+    cause of three regressions reported by the user:
+      • dragging one span removed an adjacent one whose glyph centres
+        happened to land inside the redaction rectangle,
+      • underlines / table rules under the span were redacted away,
+      • the extracted original-font code path got bypassed when
+        redaction silently failed and the CJK auto-fallback (YaHei)
+        took over.
 
-    The default `pad=0` keeps the rect tight against the span's bbox
-    so we don't accidentally redact a neighbouring span whose bbox
-    touches ours — that was the cause of "moving one element deletes
-    another".
-
-    Any pre-existing redaction annotations the user had marked are
-    stashed and restored so this only commits OUR redaction.
-
-    Falls back to a plain filled draw_rect on any error.
+    Drawing a filled rect is bullet-proof: it can't remove anything
+    from the content stream, can't damage graphics that aren't
+    directly under the rect, and can't change PyMuPDF's font
+    accounting.  The trade-off is that the original glyphs are
+    still PRESENT in the file's content stream — we keep an
+    in-memory list of "logically covered" rects on PdfDocument and
+    filter list_all_spans by it so the user doesn't see ghost
+    overlays.
     """
     if pad:
         r = fitz.Rect(rect.x0 - pad, rect.y0 - pad,
                       rect.x1 + pad, rect.y1 + pad)
     else:
         r = fitz.Rect(rect)
-
-    # Stash any pre-existing redact annotations so apply_redactions
-    # only touches ours.
-    stash: list[dict] = []
     try:
-        annots = list(page.annots() or [])
-    except Exception:
-        annots = []
-    for annot in annots:
-        try:
-            t = annot.type
-        except Exception:
-            continue
-        if t and t[0] == fitz.PDF_ANNOT_REDACT:
-            try:
-                fill = dict(annot.colors or {}).get("fill")
-            except Exception:
-                fill = None
-            stash.append({"rect": fitz.Rect(annot.rect), "fill": fill})
-            try:
-                page.delete_annot(annot)
-            except Exception:
-                pass
-
-    redacted = False
-    try:
-        # `fill=None` skips the white box — we only want the text
-        # removed; the page's other vector drawings underneath stay
-        # visible.
-        page.add_redact_annot(r, fill=None)
-        # PyMuPDF semantics (counter-intuitive):
-        #   text     = 0  → REMOVE (default)
-        #   text     = 1  → keep
-        #   graphics = 0  → keep vector drawings (preserves underlines, rules)
-        #   images   = 0  → keep raster images
-        page.apply_redactions(images=0, graphics=0)
-        redacted = True
-    except TypeError:
-        # Older PyMuPDF without the per-kind flags.
-        try:
-            page.add_redact_annot(r, fill=None)
-            page.apply_redactions()
-            redacted = True
-        except Exception:
-            pass
+        page.draw_rect(r, color=None, fill=color, overlay=True)
     except Exception:
         pass
-
-    if not redacted:
-        # Last-resort visual overpaint with the requested colour.
-        try:
-            page.draw_rect(r, color=None, fill=color, overlay=True)
-        except Exception:
-            pass
-
-    # Re-add the stashed redactions so the user's pending marks survive.
-    for s in stash:
-        try:
-            page.add_redact_annot(s["rect"], fill=s["fill"] or (0, 0, 0))
-        except Exception:
-            pass
 
 
 def replace_span(page: fitz.Page, span: TextSpan, new_text: str, *,
@@ -522,8 +489,14 @@ def replace_span(page: fitz.Page, span: TextSpan, new_text: str, *,
                      font_file=font_file, font_files=font_files)
 
 
-def list_all_spans(page: fitz.Page) -> list[TextSpan]:
-    """Every non-empty text span on the page in reading order."""
+def list_all_spans(page: fitz.Page, covered_rects=None) -> list[TextSpan]:
+    """Every non-empty text span on the page in reading order.
+
+    `covered_rects` (optional) is the list of rectangles the editor
+    has "logically deleted" — spans whose centre falls inside one of
+    these are filtered out so they don't appear as ghost overlays
+    after a move / inline-edit.
+    """
     out: list[TextSpan] = []
     data = page.get_text("dict")
     for block in data.get("blocks", []):
@@ -539,6 +512,8 @@ def list_all_spans(page: fitz.Page) -> list[TextSpan]:
                     continue
                 sr = fitz.Rect(bbox)
                 if sr.is_empty or sr.is_infinite:
+                    continue
+                if _is_covered(sr, covered_rects):
                     continue
                 origin = span.get("origin") or (sr.x0, sr.y1)
                 out.append(TextSpan(

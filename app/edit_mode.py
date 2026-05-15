@@ -564,8 +564,12 @@ class EditController(QObject):
             return
         page_item = self.viewer._page_items[page_index]
         page = self.viewer.doc.page(page_index)
+        # Spans the user "moved out of" or "deleted" earlier this
+        # session are filtered out so they don't reappear as ghost
+        # overlays after refresh_page.
+        covered = self.viewer.doc.covered_rects(page_index)
         items: list[ElementItem] = []
-        for span in list_all_spans(page):
+        for span in list_all_spans(page, covered_rects=covered):
             it = TextElementItem(self, page_item, span)
             self.viewer._scene.addItem(it)
             items.append(it)
@@ -650,6 +654,24 @@ class EditController(QObject):
         alias = fdef.base14_alias if (fdef and fdef.base14_alias) else "helv"
         return alias, font_files
 
+    def _report_resolved(self, span, font_files) -> None:
+        """Push a short status-bar note about which font we actually
+        used.  Lets the user verify visually whether preservation
+        worked or fell back."""
+        if not font_files:
+            label = f"base-14 ({alias if False else 'helv'})"
+        else:
+            import os as _os
+            label = _os.path.basename(font_files[0])
+            if label.startswith("kpdf_emb_"):
+                label = f"{label}  (原嵌入字体)"
+        try:
+            self.viewer.statusMessage.emit(
+                f"已用字体：{label}  ←  span PSName={span.font!r}"
+            )
+        except Exception:
+            pass
+
     def commit_text_move(self, item: TextElementItem, new_rect: fitz.Rect) -> None:
         doc = self.viewer.doc
         page = doc.page(item.span.page_index)
@@ -659,8 +681,13 @@ class EditController(QObject):
         move_text_span(page, item.span, new_rect,
                        font_alias=alias, font_files=font_files,
                        background=bg)
+        # Logically delete the old position — cover_rect only painted
+        # over it; the glyphs are still in the content stream so we
+        # need to filter them out of the overlay manually.
+        doc.mark_covered(item.span.page_index, item.span.rect)
         doc.mark_dirty()
         doc.pageContentChanged.emit(item.span.page_index)
+        self._report_resolved(item.span, font_files)
         self.refresh_page(item.span.page_index)
 
     def commit_text_delete(self, item: TextElementItem) -> None:
@@ -669,6 +696,7 @@ class EditController(QObject):
         bg = sample_background_color(page, item.span.rect)
         doc.push_undo()
         delete_text_span(page, item.span, background=bg)
+        doc.mark_covered(item.span.page_index, item.span.rect)
         doc.mark_dirty()
         doc.pageContentChanged.emit(item.span.page_index)
         self.refresh_page(item.span.page_index)
@@ -693,8 +721,14 @@ class EditController(QObject):
         replace_span(page, span, new_text,
                      font_alias=alias, font_files=font_files,
                      background=bg)
+        # The original span's glyphs are still in the content stream
+        # (cover_rect only painted on top). Filter them from the
+        # rebuilt overlay so we don't end up with two TextElementItems
+        # for what the user sees as a single edited span.
+        doc.mark_covered(span.page_index, span.rect)
         doc.mark_dirty()
         doc.pageContentChanged.emit(span.page_index)
+        self._report_resolved(span, font_files)
         self.refresh_page(span.page_index)
 
     def commit_image_move(self, item: ImageElementItem, new_rect: fitz.Rect) -> None:

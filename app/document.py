@@ -31,6 +31,12 @@ class PdfDocument(QObject):
         self._undo: list[bytes] = []
         self._redo: list[bytes] = []
         self._password: Optional[str] = None
+        # Per-page list of rectangles the user has "logically deleted"
+        # (covered with a white box) during this session.  The original
+        # glyphs are still in the content stream — these rects tell
+        # list_all_spans which spans to hide from the editable overlay
+        # so the user doesn't see ghost copies of the moved text.
+        self._covered_rects: dict[int, list[fitz.Rect]] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -57,6 +63,7 @@ class PdfDocument(QObject):
         self._set_dirty(False)
         self._undo.clear()
         self._redo.clear()
+        self._covered_rects.clear()
         self.documentReplaced.emit()
         return True
 
@@ -69,7 +76,24 @@ class PdfDocument(QObject):
         self._set_dirty(False)
         self._undo.clear()
         self._redo.clear()
+        self._covered_rects.clear()
         self.documentReplaced.emit()
+
+    # ------------------------------------------------------------------
+    # Logical-delete tracking — see _covered_rects field doc
+    # ------------------------------------------------------------------
+    def covered_rects(self, page_index: int) -> list:
+        """All rectangles the editor has visually covered on this page."""
+        return list(self._covered_rects.get(page_index, ()))
+
+    def mark_covered(self, page_index: int, rect) -> None:
+        self._covered_rects.setdefault(page_index, []).append(fitz.Rect(rect))
+
+    def clear_covered(self, page_index: Optional[int] = None) -> None:
+        if page_index is None:
+            self._covered_rects.clear()
+        else:
+            self._covered_rects.pop(page_index, None)
 
     def is_open(self) -> bool:
         return self.doc is not None
@@ -119,6 +143,9 @@ class PdfDocument(QObject):
     # ------------------------------------------------------------------
     # Undo / Redo
     # ------------------------------------------------------------------
+    def _snapshot_covered(self) -> dict[int, list]:
+        return {k: list(v) for k, v in self._covered_rects.items()}
+
     def push_undo(self) -> None:
         """Snapshot current document for undo. Call BEFORE a mutation."""
         if self.doc is None:
@@ -127,7 +154,7 @@ class PdfDocument(QObject):
             snap = self.doc.tobytes(garbage=0, deflate=False)
         except Exception:
             return
-        self._undo.append(snap)
+        self._undo.append((snap, self._snapshot_covered()))
         if len(self._undo) > UNDO_LIMIT:
             self._undo.pop(0)
         self._redo.clear()
@@ -141,17 +168,21 @@ class PdfDocument(QObject):
     def undo(self) -> None:
         if not self._undo or self.doc is None:
             return
-        cur = self.doc.tobytes(garbage=0, deflate=False)
+        cur = (self.doc.tobytes(garbage=0, deflate=False),
+               self._snapshot_covered())
         self._redo.append(cur)
-        data = self._undo.pop()
+        data, covered = self._undo.pop()
+        self._covered_rects = covered
         self._reload_from_bytes(data)
 
     def redo(self) -> None:
         if not self._redo or self.doc is None:
             return
-        cur = self.doc.tobytes(garbage=0, deflate=False)
+        cur = (self.doc.tobytes(garbage=0, deflate=False),
+               self._snapshot_covered())
         self._undo.append(cur)
-        data = self._redo.pop()
+        data, covered = self._redo.pop()
+        self._covered_rects = covered
         self._reload_from_bytes(data)
 
     def _reload_from_bytes(self, data: bytes) -> None:
