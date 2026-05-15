@@ -516,20 +516,79 @@ def cover_rect(page: fitz.Page, rect: fitz.Rect,
             pass
 
 
+def resolve_font_chain(page: fitz.Page, span: TextSpan,
+                        text: Optional[str] = None
+                        ) -> tuple[str, list[str]]:
+    """Build the ordered font-fallback chain for re-inserting a span.
+
+    This is the single source of truth — anywhere we put text back on
+    the page (moves, replaces, bystander rescue) should call this so
+    the resulting font matches the original.  Stacked, in priority
+    order:
+
+      1. **Extracted**: the PDF's own embedded copy of the span's font
+         (Document.extract_font).  Subset fonts cover the original
+         glyphs perfectly.  For inline edits with NEW characters we
+         only keep this if `font_supports_text` confirms coverage.
+      2. **System by PSName**: a TTF/OTF on the host machine whose
+         internal PSName matches the span's.
+      3. **Bundled by alias**: one of the shipped fonts whose alias
+         table matches the span's PSName (e.g. SimSun → simsun.ttc).
+      4. **CJK safety net**: when the text contains CJK chars and we
+         haven't already picked a CJK file, append the first bundled
+         CJK font so the text never falls all the way to Helvetica.
+
+    Returns `(alias, font_files)`.  `safe_insert_text` tries each file
+    in order; `alias` is the base-14 fallback alias if all fail.
+    """
+    from .font_registry import (
+        _first_bundled_cjk, get_font, pick_default_for_span,
+    )
+    target_text = span.text if text is None else text
+    is_drag = text is None or text == span.text
+    has_cjk = any(ord(c) > 0xFF for c in target_text)
+
+    font_files: list[str] = []
+
+    extracted = extract_embedded_font(page, span.font)
+    if extracted:
+        covers = is_drag or font_supports_text(extracted, target_text)
+        if covers:
+            font_files.append(extracted)
+
+    sys_path = find_system_font_by_psname(span.font)
+    if sys_path and sys_path not in font_files:
+        font_files.append(sys_path)
+
+    key = pick_default_for_span(span.font, bold=span.is_bold,
+                                 italic=span.is_italic)
+    fdef = get_font(key)
+    bundled_path = fdef.file if (fdef and fdef.is_bundled) else None
+    if bundled_path and bundled_path not in font_files:
+        font_files.append(bundled_path)
+
+    if has_cjk:
+        cjk_key = _first_bundled_cjk(bold=span.is_bold)
+        if cjk_key:
+            cjk_def = get_font(cjk_key)
+            if cjk_def and cjk_def.file and cjk_def.file not in font_files:
+                font_files.append(cjk_def.file)
+
+    alias = fdef.base14_alias if (fdef and fdef.base14_alias) else map_to_base14(span)
+    return alias, font_files
+
+
 def _reinsert_span(page: fitz.Page, span: TextSpan) -> None:
     """Best-effort re-insertion of a span at its original origin using
     its original font face and size.  Used to repair "bystander"
     spans that get accidentally caught by apply_redactions when two
     spans overlap.
+
+    Goes through the same `resolve_font_chain` the editor uses for
+    every other text re-insertion, so a rescued span keeps its
+    original face instead of drifting to Helvetica / YaHei.
     """
-    alias = map_to_base14(span)
-    font_files: list[str] = []
-    extracted = extract_embedded_font(page, span.font)
-    if extracted:
-        font_files.append(extracted)
-    sys_path = find_system_font_by_psname(span.font)
-    if sys_path and sys_path not in font_files:
-        font_files.append(sys_path)
+    alias, font_files = resolve_font_chain(page, span)
     safe_insert_text(page, span.origin, span.text,
                      fontsize=span.size, font_alias=alias,
                      color=span.color_rgb, font_files=font_files)

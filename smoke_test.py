@@ -381,6 +381,100 @@ def main() -> int:
         )
         print("[smoke] A moved onto B then off — B preserved: OK")
 
+        # Element-based regression: A→B then B→far must NOT corrupt B's
+        # font.  Before the resolve_font_chain factoring, _reinsert_span
+        # only tried extract + system PSName — for CJK PDFs whose
+        # PSName came through as mojibake, that fell all the way to
+        # YaHei.  Test with simfang.ttf so any drift to msyh.ttc is
+        # detectable.
+        sys_fang3 = "C:/Windows/Fonts/simfang.ttf"
+        if os.path.isfile(sys_fang3):
+            font_drift_pdf = os.path.join(tmp, "font_drift.pdf")
+            d_fd = fitz.open()
+            p_fd = d_fd.new_page(width=400, height=400)
+            p_fd.insert_text((50, 100), "甲甲甲", fontsize=14,
+                              fontname="ufang_a", fontfile=sys_fang3)
+            p_fd.insert_text((200, 100), "乙乙乙", fontsize=14,
+                              fontname="ufang_b", fontfile=sys_fang3)
+            d_fd.save(font_drift_pdf)
+            d_fd.close()
+            win.doc.open(font_drift_pdf)
+            ctrl_fd = win.viewer.edit_controller
+            items_fd = ctrl_fd._items_per_page.get(0, [])
+            a_elem = next(e for e in items_fd if isinstance(e, TextElementItem)
+                           and "甲" in e.span.text)
+            b_origin = next(e for e in items_fd if isinstance(e, TextElementItem)
+                             and "乙" in e.span.text).original_pdf_rect
+            # Step 1: drag A onto B's position.
+            zoom = win.viewer.zoom
+            page0_pos = win.viewer._page_items[0].pos()
+            a_elem.setPos(page0_pos.x() + b_origin.x0 * zoom,
+                           page0_pos.y() + b_origin.y0 * zoom)
+            a_elem.commit_move()
+            # Now A and B at B's position.
+            page_after_ab = win.doc.page(0).get_text("text")
+            assert "甲" in page_after_ab and "乙" in page_after_ab, (
+                f"after A→B both should still exist: {page_after_ab!r}"
+            )
+            # Step 2: drag B somewhere far.
+            items_fd = ctrl_fd._items_per_page.get(0, [])
+            b_now = next((e for e in items_fd if isinstance(e, TextElementItem)
+                           and "乙" in e.span.text), None)
+            assert b_now is not None, "乙 element lost after A→B"
+            b_now.setPos(page0_pos.x() + 300 * zoom,
+                          page0_pos.y() + 300 * zoom)
+            b_now.commit_move()
+            # After both moves: page text has both characters once.
+            after_text = win.doc.page(0).get_text("text")
+            assert after_text.count("甲") == 3, (
+                f"expected 3 甲 chars in '甲甲甲', got "
+                f"{after_text.count('甲')} : {after_text!r}"
+            )
+            assert after_text.count("乙") == 3, (
+                f"expected 3 乙 chars in '乙乙乙', got "
+                f"{after_text.count('乙')} : {after_text!r}"
+            )
+            # Crucial: the rescued 甲 span (still sitting at B's
+            # original position) must NOT have drifted to YaHei.
+            from app.text_edit import list_all_spans as _las
+            spans_final = _las(win.doc.page(0))
+            jiu = [s for s in spans_final if "甲" in s.text]
+            yi = [s for s in spans_final if "乙" in s.text]
+            assert jiu, "甲 span missing from final state"
+            assert yi, "乙 span missing from final state"
+            for s in jiu + yi:
+                fn = s.font.lower()
+                # A YaHei fallback would show up as "MicrosoftYaHei" or
+                # similar.  simfang/simhei/simsun are all acceptable
+                # CJK faces; YaHei would be the buggy fallback.
+                assert "yahei" not in fn and "msyh" not in fn, (
+                    f"font drifted to YaHei: span={s.text!r} font={s.font!r}"
+                )
+            # Position checks: 甲 should be at B's original position
+            # (where A landed when dragged onto B), and 乙 should be at
+            # the far position the user dragged it to.
+            jiu_at_b_original = [s for s in jiu
+                                  if abs(s.rect.x0 - b_origin.x0) < 8]
+            yi_at_far = [s for s in yi if s.rect.x0 > 250]
+            assert jiu_at_b_original, (
+                f"甲 not at B's original position; spans={[(s.text, s.rect.x0) for s in jiu]}"
+            )
+            assert yi_at_far, (
+                f"乙 not at far position; spans={[(s.text, s.rect.x0) for s in yi]}"
+            )
+            # And: there must be NO 乙 left at B's original position
+            # (that would be Bug 2 — 'B's original element didn't
+            # disappear after B moved').
+            yi_stuck = [s for s in yi if abs(s.rect.x0 - b_origin.x0) < 8]
+            assert not yi_stuck, (
+                f"Bug 2: 乙 still at B's original position after move: "
+                f"{[(s.text, s.rect) for s in yi_stuck]}"
+            )
+            print("[smoke] A→B then B→far, fonts preserved (no YaHei drift): OK")
+            print("[smoke] A→B→far: 甲 at B-orig, 乙 at far, no 乙 ghost: OK")
+        else:
+            print("[smoke] skip font-drift test (simfang.ttf not present)")
+
         # Overlapping element selection: build a doc with two text
         # spans whose bboxes overlap, verify they get distinct Z-values
         # (smaller on top) so the user can reach the smaller one with

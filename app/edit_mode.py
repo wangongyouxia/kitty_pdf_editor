@@ -607,42 +607,28 @@ class EditController(QObject):
     # ------------------------------------------------------------------
     def _resolve_span_font(self, span, text: Optional[str] = None,
                             diagnostic: Optional[dict] = None):
-        """Build the ordered font-fallback chain for re-inserting text.
+        """Resolve the font fallback chain via `text_edit.resolve_font_chain`.
 
-        Returns (alias, font_files) where `font_files` is a list to be
-        tried in order by `safe_insert_text`.  The first one that
-        PyMuPDF can actually load wins, so we stack:
-
-          1. The font that's *already embedded in the PDF* for this
-             span — extracted via Document.extract_font.  For drag
-             (text unchanged) the original subset definitely covers
-             its own glyphs, so we always try this first.  For inline
-             edits with new chars we only try it if `font_supports_text`
-             confirms every codepoint is present.
-          2. A bundled font matched by PSName (Microsoft YaHei →
-             msyh.ttc, SimSun → simsun.ttc, …) via
-             `pick_default_for_span`.
-          3. If the target text contains CJK characters and the
-             bundled match was base-14, ALSO append the first bundled
-             CJK font — that way unrecognised Chinese PSNames still
-             render as Chinese instead of falling all the way to
-             Helvetica.
-          4. The base-14 alias is the very last resort (handled by
-             safe_insert_text itself, no file).
+        The actual chain construction lives in `text_edit.resolve_font_chain`
+        so the bystander-rescue path in `_reinsert_span` produces identical
+        output.  This wrapper additionally fills in `diagnostic` so the
+        per-edit log shows every step that was considered.
         """
         from .font_registry import (
             _first_bundled_cjk, get_font, pick_default_for_span,
         )
         from .text_edit import (
             extract_embedded_font, find_system_font_by_psname,
-            font_supports_text,
+            font_supports_text, resolve_font_chain,
         )
         page = self.viewer.doc.page(span.page_index)
         target_text = span.text if text is None else text
         is_drag = text is None or text == span.text
         has_cjk = any(ord(c) > 0xFF for c in target_text)
 
-        font_files: list[str] = []
+        # Compute the actual chain ONCE through the shared resolver.
+        alias, font_files = resolve_font_chain(page, span, text=text)
+
         diag = diagnostic if diagnostic is not None else {}
         diag["span_psname"] = span.font
         diag["span_text"] = span.text[:60]
@@ -654,47 +640,35 @@ class EditController(QObject):
         diag["has_cjk"] = has_cjk
         diag["candidates"] = []
 
-        # 1. Original embedded font extracted from the PDF resources.
+        # Replay each fallback step purely for telemetry — these calls
+        # are pure / cached, so re-running them is cheap.
         embedded = extract_embedded_font(page, span.font)
         if embedded:
             covers = is_drag or font_supports_text(embedded, target_text)
             diag["candidates"].append({
-                "step": "extracted",
-                "path": embedded,
-                "added": covers,
-                "covers_text": covers,
+                "step": "extracted", "path": embedded,
+                "added": embedded in font_files, "covers_text": covers,
             })
-            if covers:
-                font_files.append(embedded)
         else:
             diag["candidates"].append({"step": "extracted", "path": None,
                                         "added": False})
 
-        # 2. System font by PSName.
         sys_path = find_system_font_by_psname(span.font)
-        added_sys = sys_path is not None and sys_path not in font_files
         diag["candidates"].append({
             "step": "system_by_psname", "path": sys_path,
-            "added": added_sys,
+            "added": sys_path in font_files if sys_path else False,
         })
-        if added_sys:
-            font_files.append(sys_path)
 
-        # 3. Bundled font matched by PSName (SimSun → simsun.ttc …).
         key = pick_default_for_span(span.font, bold=span.is_bold,
                                      italic=span.is_italic)
         fdef = get_font(key)
         bundled_path = (fdef.file if fdef and fdef.is_bundled else None)
-        added_bundled = (bundled_path is not None
-                         and bundled_path not in font_files)
         diag["candidates"].append({
             "step": "bundled_by_alias", "alias_key": key,
-            "path": bundled_path, "added": added_bundled,
+            "path": bundled_path,
+            "added": bundled_path in font_files if bundled_path else False,
         })
-        if added_bundled:
-            font_files.append(bundled_path)
 
-        # 4. CJK escalation: ensure Chinese text never falls to Helv.
         cjk_path = None
         if has_cjk:
             cjk_key = _first_bundled_cjk(bold=span.is_bold)
@@ -702,14 +676,11 @@ class EditController(QObject):
                 cjk_def = get_font(cjk_key)
                 if cjk_def and cjk_def.file:
                     cjk_path = cjk_def.file
-        added_cjk = (cjk_path is not None and cjk_path not in font_files)
         diag["candidates"].append({
-            "step": "cjk_safety_net", "path": cjk_path, "added": added_cjk,
+            "step": "cjk_safety_net", "path": cjk_path,
+            "added": cjk_path in font_files if cjk_path else False,
         })
-        if added_cjk:
-            font_files.append(cjk_path)
 
-        alias = fdef.base14_alias if (fdef and fdef.base14_alias) else "helv"
         diag["alias"] = alias
         diag["chosen_chain"] = list(font_files)
         return alias, font_files
