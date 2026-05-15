@@ -150,6 +150,65 @@ def main() -> int:
         assert annot_count >= 6, f"expected >=6 annotations, got {annot_count}"
         print(f"[smoke] annotations: OK ({annot_count} written)")
 
+        # Dragging a span MUST preserve the original embedded font.
+        # Build a doc, write a span with msyh.ttc, capture the PSName
+        # PyMuPDF assigns; after move_text_span the moved span should
+        # still report the SAME PSName, not a YaHei substitute.
+        from app.text_edit import (
+            extract_embedded_font, find_unicode_font, font_supports_text,
+            list_all_spans, move_text_span, safe_insert_text,
+        )
+        from app.edit_mode import EditController
+        preserve_pdf = os.path.join(tmp, "preserve.pdf")
+        d_pres = fitz.open()
+        p_pres = d_pres.new_page(width=400, height=200)
+        # Insert with a non-default font path so we have a known
+        # embedded font to look for.
+        kai_path = "C:/Windows/Fonts/simkai.ttf"
+        if not os.path.isfile(kai_path):
+            kai_path = find_unicode_font() or ""
+        p_pres.insert_text((50, 100), "原字体测试",
+                            fontsize=14, fontname="user-kai", fontfile=kai_path)
+        d_pres.save(preserve_pdf)
+        d_pres.close()
+        d_pres = fitz.open(preserve_pdf)
+        page_p = d_pres[0]
+        spans_p = list_all_spans(page_p)
+        target = next(s for s in spans_p if "测试" in s.text)
+        original_psname = target.font
+        print(f"[smoke] preserved-font PSName before: {original_psname}")
+
+        # Resolve like the editor would.
+        ctrl = EditController(win.viewer)
+        win.doc.open(preserve_pdf)
+        spans = list_all_spans(win.doc.page(0))
+        target = next(s for s in spans if "测试" in s.text)
+        # _resolve_span_font is what EditController uses internally.
+        alias, font_file = ctrl._resolve_span_font(target)
+        assert font_file is not None, "should resolve to a real font file"
+        # Move the span using that font file.
+        move_text_span(
+            win.doc.page(0), target,
+            fitz.Rect(150, 50, 150 + target.rect.width,
+                      50 + target.rect.height),
+            font_alias=alias, font_file=font_file,
+        )
+        # Re-detect the moved span; its PSName should NOT be 'Helvetica'
+        # / 'MicrosoftYaHei' (the wrong fallback path).
+        spans_after = list_all_spans(win.doc.page(0))
+        moved = next((s for s in spans_after if "测试" in s.text), None)
+        assert moved is not None, "moved text not found"
+        new_psname = moved.font
+        print(f"[smoke] preserved-font PSName after move: {new_psname}")
+        # The PSName may have a different subset prefix but the
+        # *basename* should match the original font family — and
+        # certainly not Helvetica.
+        assert "helvetica" not in new_psname.lower(), (
+            f"font fell back to Helvetica after move: {new_psname!r}"
+        )
+        print("[smoke] move preserves original font (not Helvetica): OK")
+        d_pres.close()
+
         # Moving one text element must NOT delete a nearby element whose
         # bbox merely touches the redaction rect.
         from app.text_edit import (

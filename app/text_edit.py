@@ -635,6 +635,122 @@ def move_text_span(page: fitz.Page, span: TextSpan, new_rect: fitz.Rect, *,
                      font_file=font_file)
 
 
+# ----------------------------------------------------------------------
+# Reuse the original font from the PDF's own resources.
+#
+# When we move or re-edit a span we'd ideally insert the new text with
+# the *exact* same font face — not a YaHei stand-in.  PyMuPDF lets us
+# pull the embedded font bytes via Document.extract_font(xref); we
+# write them to a temp file and pass the path through safe_insert_text.
+# Most CJK PDFs embed the font as a TTF/OTF/TTC subset.  Subset fonts
+# may not have glyphs for characters the user newly types, so we also
+# expose `font_supports_text()` to verify before committing.
+# ----------------------------------------------------------------------
+import hashlib as _hashlib
+import tempfile as _tempfile
+
+# Cache: (id(doc), font psname) → path or None.  Same font extracted
+# repeatedly returns the same temp file.
+_embedded_font_cache: dict[tuple, Optional[str]] = {}
+
+
+def extract_embedded_font(page: fitz.Page, font_psname: str) -> Optional[str]:
+    """Return a temp-file path to the PDF's own embedded copy of
+    `font_psname`, or None when it can't be extracted.
+    """
+    if not font_psname:
+        return None
+    doc = page.parent  # the fitz.Document this page belongs to
+    cache_key = (id(doc), font_psname)
+    if cache_key in _embedded_font_cache:
+        cached = _embedded_font_cache[cache_key]
+        if cached is None or os.path.isfile(cached):
+            return cached
+        # Stale (temp got cleaned); fall through and re-extract.
+
+    target = font_psname.strip()
+    target_low = target.lower()
+    # Strip the standard '+'-prefix subset marker for comparison.
+    if "+" in target:
+        bn_low = target.split("+", 1)[1].lower()
+    else:
+        bn_low = target_low
+
+    try:
+        fonts = page.get_fonts()
+    except Exception:
+        _embedded_font_cache[cache_key] = None
+        return None
+
+    for fo in fonts:
+        try:
+            xref = fo[0]
+            basename = (fo[3] if len(fo) > 3 else "") or ""
+            name = (fo[4] if len(fo) > 4 else "") or ""
+        except Exception:
+            continue
+        if name.lower() != target_low and basename.lower() != bn_low:
+            continue
+        try:
+            info = doc.extract_font(xref)
+        except Exception:
+            continue
+        if not info:
+            continue
+        # extract_font returns either a dict OR (legacy) a tuple
+        # (basename, ext, type, content).
+        if isinstance(info, dict):
+            ext = (info.get("ext") or "ttf").lower()
+            content = info.get("content") or b""
+        else:
+            try:
+                ext = (info[1] or "ttf").lower()
+                content = info[3] or b""
+            except Exception:
+                continue
+        if not content or ext not in ("ttf", "otf", "ttc", "cff"):
+            continue
+        digest = _hashlib.md5(content[:4096]).hexdigest()[:12]
+        path = os.path.join(
+            _tempfile.gettempdir(), f"kpdf_emb_{digest}.{ext}",
+        )
+        if not os.path.isfile(path):
+            try:
+                with open(path, "wb") as f:
+                    f.write(content)
+            except OSError:
+                continue
+        _embedded_font_cache[cache_key] = path
+        return path
+
+    _embedded_font_cache[cache_key] = None
+    return None
+
+
+def font_supports_text(font_path: str, text: str) -> bool:
+    """Whether the TTF/OTF at `font_path` has a glyph for every char
+    in `text`.  Subset fonts often lack glyphs for *new* characters
+    the user types during inline edit — in that case we must fall back
+    to a bundled full-coverage font.
+    """
+    if not font_path or not os.path.isfile(font_path):
+        return False
+    try:
+        font = fitz.Font(fontfile=font_path)
+    except Exception:
+        return False
+    for c in text or "":
+        cp = ord(c)
+        if cp < 0x20 or cp == 0x7F:
+            continue  # ASCII control / DEL
+        try:
+            if not font.has_glyph(cp):
+                return False
+        except Exception:
+            return False
+    return True
+
+
 def sample_background_color(page: fitz.Page, near: fitz.Rect,
                              margin: float = 4.0) -> tuple[float, float, float]:
     """Sample a pixel just outside `near` to guess the page background colour.

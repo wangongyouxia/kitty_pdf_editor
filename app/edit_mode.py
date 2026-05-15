@@ -589,9 +589,33 @@ class EditController(QObject):
     # ------------------------------------------------------------------
     # Commits — called by the items themselves
     # ------------------------------------------------------------------
-    def _resolve_span_font(self, span):
-        """Resolve a span's original font name to a registry entry."""
+    def _resolve_span_font(self, span, text: Optional[str] = None):
+        """Pick a font for re-inserting `text` so it visually matches
+        the original span as closely as possible.
+
+        Priority:
+          1. The font that's *already embedded in the PDF* for this
+             span — extracted via Document.extract_font and reused
+             verbatim.  This is byte-identical to the source so the
+             result is indistinguishable from the original.  Requires
+             the font to be a TTF / OTF / TTC and cover every char in
+             `text` (subset fonts may miss newly-typed characters).
+          2. A bundled font matched by PSName (Microsoft YaHei, SimSun
+             …) via `pick_default_for_span`.
+          3. Base-14 fallback.
+        """
         from .font_registry import get_font, pick_default_for_span
+        from .text_edit import extract_embedded_font, font_supports_text
+        page = self.viewer.doc.page(span.page_index)
+        target_text = span.text if text is None else text
+
+        embedded = extract_embedded_font(page, span.font)
+        if embedded and font_supports_text(embedded, target_text):
+            # The alias doesn't matter when font_file is set, but
+            # safe_insert_text still references it for its fallback
+            # path.
+            return "helv", embedded
+
         key = pick_default_for_span(span.font, bold=span.is_bold,
                                      italic=span.is_italic)
         fdef = get_font(key)
@@ -631,7 +655,10 @@ class EditController(QObject):
         """Replace text content keeping the original style."""
         from .text_edit import replace_span
         span = item.span
-        alias, font_file = self._resolve_span_font(span)
+        # Pass the NEW text so the embedded-font glyph-coverage check
+        # can fall back to a bundled font if the user typed characters
+        # the original subset doesn't have.
+        alias, font_file = self._resolve_span_font(span, text=new_text)
         doc = self.viewer.doc
         page = doc.page(span.page_index)
         bg = sample_background_color(page, span.rect)
