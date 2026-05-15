@@ -335,6 +335,52 @@ def main() -> int:
         )
         print(f"[smoke] repeat drag stays selectable ({len(target_pts)} moves): OK")
 
+        # Move A onto B, then move A away — B must survive.  Before
+        # the fix, apply_redactions deleted B too because its glyph
+        # centres lay inside A's bbox.
+        overlap_drag_pdf = os.path.join(tmp, "overlap_drag.pdf")
+        d_od = fitz.open()
+        p_od = d_od.new_page(width=400, height=400)
+        p_od.insert_text((50, 100), "AAA", fontsize=14)
+        p_od.insert_text((200, 100), "BBB", fontsize=14)
+        d_od.save(overlap_drag_pdf)
+        d_od.close()
+        win.doc.open(overlap_drag_pdf)
+        ctrl_od = win.viewer.edit_controller
+        items_od = ctrl_od._items_per_page.get(0, [])
+        # Pick the AAA element
+        a_elem = next(e for e in items_od if isinstance(e, TextElementItem)
+                       and "AAA" in e.span.text)
+        b_origin_rect = next(e for e in items_od if isinstance(e, TextElementItem)
+                              and "BBB" in e.span.text).original_pdf_rect
+        # Move A onto B's position
+        b_scene_x = win.viewer._page_items[0].pos().x() + b_origin_rect.x0 * win.viewer.zoom
+        b_scene_y = win.viewer._page_items[0].pos().y() + b_origin_rect.y0 * win.viewer.zoom
+        a_elem.setPos(b_scene_x, b_scene_y)
+        a_elem.commit_move()
+        # Now A and B are both at B's position. Drag A away.
+        items_od = ctrl_od._items_per_page.get(0, [])
+        # Find the AAA element again (after refresh)
+        aaa_after = next((e for e in items_od if isinstance(e, TextElementItem)
+                          and "AAA" in e.span.text), None)
+        assert aaa_after is not None, "AAA lost after first move"
+        far_x = win.viewer._page_items[0].pos().x() + 300 * win.viewer.zoom
+        far_y = win.viewer._page_items[0].pos().y() + 250 * win.viewer.zoom
+        aaa_after.setPos(far_x, far_y)
+        aaa_after.commit_move()
+        # B must still be present.
+        page_text = win.doc.page(0).get_text("text")
+        assert "BBB" in page_text, (
+            f"BBB was deleted when A moved off it; page text = {page_text!r}"
+        )
+        items_od = ctrl_od._items_per_page.get(0, [])
+        bbb_survivor = [e for e in items_od if isinstance(e, TextElementItem)
+                         and "BBB" in e.span.text]
+        assert bbb_survivor, (
+            "BBB lost from overlay after A's second move"
+        )
+        print("[smoke] A moved onto B then off — B preserved: OK")
+
         # Overlapping element selection: build a doc with two text
         # spans whose bboxes overlap, verify they get distinct Z-values
         # (smaller on top) so the user can reach the smaller one with

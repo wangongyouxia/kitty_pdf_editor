@@ -788,16 +788,19 @@ class EditController(QObject):
         diag: dict = {"op": "move"}
         alias, font_files = self._resolve_span_font(item.span, diagnostic=diag)
         doc.push_undo()
-        move_text_span(page, item.span, new_rect,
-                       font_alias=alias, font_files=font_files,
-                       background=bg)
-        # Old position is logically deleted (and physically too via
-        # apply_redactions); new position has fresh content so any
-        # earlier covered_rect overlapping it must be lifted, otherwise
-        # the about-to-be-built TextElementItem at new_rect gets
-        # filtered out and the user can no longer click the element.
+        rescued = move_text_span(page, item.span, new_rect,
+                                  font_alias=alias, font_files=font_files,
+                                  background=bg)
         doc.mark_covered(item.span.page_index, item.span.rect)
         doc.uncover_at(item.span.page_index, new_rect)
+        # When move_text_span had to re-insert "bystander" spans (e.g.
+        # the user dragged this element off another span and the
+        # geometric redaction caught the bystander too), the bystander
+        # now sits inside the just-stamped covered_rect.  Lift the
+        # cover at each bystander's rect so the rebuilt overlay
+        # actually shows them.
+        for b in rescued:
+            doc.uncover_at(item.span.page_index, b.rect)
         doc.mark_dirty()
         doc.pageContentChanged.emit(item.span.page_index)
         self._report_resolved(item.span, font_files, diag)
@@ -830,19 +833,19 @@ class EditController(QObject):
         page = doc.page(span.page_index)
         bg = sample_background_color(page, span.rect)
         doc.push_undo()
-        replace_span(page, span, new_text,
-                     font_alias=alias, font_files=font_files,
-                     background=bg)
+        rescued = replace_span(page, span, new_text,
+                                font_alias=alias, font_files=font_files,
+                                background=bg)
         # For replace, new text occupies the SAME rect as the old one —
         # we must NOT mark_covered or the new span gets filtered out
-        # of the rebuilt overlay (its centre is inside the rect we
-        # just covered).  Empty replacement is a delete: then we mark.
+        # of the rebuilt overlay.  Empty replacement is a delete:
+        # then we mark.
         if not new_text:
             doc.mark_covered(span.page_index, span.rect)
         else:
-            # Any earlier covered_rect that fell inside the rect we
-            # just re-filled is no longer relevant.
             doc.uncover_at(span.page_index, span.rect)
+        for b in rescued or []:
+            doc.uncover_at(span.page_index, b.rect)
         doc.mark_dirty()
         doc.pageContentChanged.emit(span.page_index)
         self._report_resolved(span, font_files, diag)

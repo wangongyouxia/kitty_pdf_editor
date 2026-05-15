@@ -516,6 +516,80 @@ def cover_rect(page: fitz.Page, rect: fitz.Rect,
             pass
 
 
+def _reinsert_span(page: fitz.Page, span: TextSpan) -> None:
+    """Best-effort re-insertion of a span at its original origin using
+    its original font face and size.  Used to repair "bystander"
+    spans that get accidentally caught by apply_redactions when two
+    spans overlap.
+    """
+    alias = map_to_base14(span)
+    font_files: list[str] = []
+    extracted = extract_embedded_font(page, span.font)
+    if extracted:
+        font_files.append(extracted)
+    sys_path = find_system_font_by_psname(span.font)
+    if sys_path and sys_path not in font_files:
+        font_files.append(sys_path)
+    safe_insert_text(page, span.origin, span.text,
+                     fontsize=span.size, font_alias=alias,
+                     color=span.color_rgb, font_files=font_files)
+
+
+def remove_span(page: fitz.Page, target_span: TextSpan,
+                background: tuple[float, float, float] = (1.0, 1.0, 1.0)
+                ) -> list[TextSpan]:
+    """Remove `target_span`'s glyphs while preserving other spans
+    whose chars happen to share the bbox area.
+
+    apply_redactions is purely geometric — if you dragged one span
+    on top of another, redacting one will delete both.  We work
+    around that by:
+
+      1. snapshotting every span that overlaps the target's rect
+         (target itself excluded by text + position match);
+      2. running apply_redactions;
+      3. checking which of the snapshotted "bystanders" disappeared,
+         and re-inserting any that did using their original font.
+
+    Returns the list of bystander spans that had to be re-inserted,
+    so the caller can lift any covered_rect that now sits on top of
+    them.
+    """
+    target_rect = fitz.Rect(target_span.rect)
+    before = list_all_spans(page)
+    bystanders: list[TextSpan] = []
+    target_consumed = False
+    for s in before:
+        is_target = (
+            not target_consumed
+            and s.text == target_span.text
+            and abs(s.rect.x0 - target_rect.x0) < 1.5
+            and abs(s.rect.y0 - target_rect.y0) < 1.5
+        )
+        if is_target:
+            target_consumed = True
+            continue
+        if s.rect.intersects(target_rect):
+            bystanders.append(s)
+
+    cover_rect(page, target_rect, color=background, pad=0)
+
+    if not bystanders:
+        return []
+    after = list_all_spans(page)
+    after_keys = {
+        (s.text, round(s.rect.x0, 0), round(s.rect.y0, 0)) for s in after
+    }
+    rescued: list[TextSpan] = []
+    for b in bystanders:
+        key = (b.text, round(b.rect.x0, 0), round(b.rect.y0, 0))
+        if key in after_keys:
+            continue
+        _reinsert_span(page, b)
+        rescued.append(b)
+    return rescued
+
+
 def replace_span(page: fitz.Page, span: TextSpan, new_text: str, *,
                  font_alias: Optional[str] = None,
                  font_file: Optional[str] = None,
@@ -523,17 +597,20 @@ def replace_span(page: fitz.Page, span: TextSpan, new_text: str, *,
                  font_size: Optional[float] = None,
                  text_color: Optional[tuple[float, float, float]] = None,
                  background: tuple[float, float, float] = (1.0, 1.0, 1.0),
-                 cover_pad: float = 0.5) -> None:
-    """Cover the original span and write `new_text` at the same baseline."""
-    cover_rect(page, span.rect, color=background, pad=cover_pad)
+                 cover_pad: float = 0.5) -> list[TextSpan]:
+    """Remove the original span and write `new_text` at the same
+    baseline.  Returns the list of bystander spans that had to be
+    rescued during removal."""
+    rescued = remove_span(page, span, background=background)
     if not new_text:
-        return
+        return rescued
     alias = font_alias or map_to_base14(span)
     size = font_size if font_size is not None else span.size
     color = text_color if text_color is not None else span.color_rgb
     safe_insert_text(page, span.origin, new_text,
                      fontsize=size, font_alias=alias, color=color,
                      font_file=font_file, font_files=font_files)
+    return rescued
 
 
 def list_all_spans(page: fitz.Page, covered_rects=None) -> list[TextSpan]:
@@ -643,7 +720,7 @@ def delete_image(page: fitz.Page, instance: ImageInstance,
 
 def delete_text_span(page: fitz.Page, span: TextSpan,
                      background: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
-    cover_rect(page, span.rect, color=background, pad=0.5)
+    remove_span(page, span, background=background)
 
 
 def move_text_span(page: fitz.Page, span: TextSpan, new_rect: fitz.Rect, *,
@@ -652,14 +729,14 @@ def move_text_span(page: fitz.Page, span: TextSpan, new_rect: fitz.Rect, *,
                    font_files: Optional[list[str]] = None,
                    font_size: Optional[float] = None,
                    text_color: Optional[tuple[float, float, float]] = None,
-                   background: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
+                   background: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> list[TextSpan]:
     """Move (and optionally resize) a text span to `new_rect`.
 
     Font size scales with the rect's height ratio when `font_size` is
     not given.  Origin (baseline) is re-computed by preserving the
     relative offset within the original rect.
     """
-    cover_rect(page, span.rect, color=background)
+    rescued = remove_span(page, span, background=background)
     orig_w = max(span.rect.width, 0.01)
     orig_h = max(span.rect.height, 0.01)
     new_w = max(new_rect.width, 0.01)
@@ -679,6 +756,7 @@ def move_text_span(page: fitz.Page, span: TextSpan, new_rect: fitz.Rect, *,
     safe_insert_text(page, new_origin, span.text,
                      fontsize=size, font_alias=alias, color=color,
                      font_file=font_file, font_files=font_files)
+    return rescued
 
 
 # ----------------------------------------------------------------------
