@@ -95,6 +95,30 @@ class PdfDocument(QObject):
         else:
             self._covered_rects.pop(page_index, None)
 
+    def uncover_at(self, page_index: int, rect) -> int:
+        """Drop any covered_rect on `page_index` whose centre falls
+        inside `rect`.  Used right after fresh content is inserted at
+        `rect` — that area is no longer "logically deleted" no matter
+        what previous moves stamped there.
+
+        Returns the number of covered rects removed.
+        """
+        existing = self._covered_rects.get(page_index)
+        if not existing:
+            return 0
+        r = fitz.Rect(rect)
+        kept = []
+        dropped = 0
+        for cr in existing:
+            cx = (cr.x0 + cr.x1) / 2.0
+            cy = (cr.y0 + cr.y1) / 2.0
+            if r.x0 <= cx <= r.x1 and r.y0 <= cy <= r.y1:
+                dropped += 1
+                continue
+            kept.append(cr)
+        self._covered_rects[page_index] = kept
+        return dropped
+
     def is_open(self) -> bool:
         return self.doc is not None
 

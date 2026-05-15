@@ -299,6 +299,42 @@ def main() -> int:
         assert not ghosts, f"ghost overlay at old position: {ghosts}"
         print("[smoke] end-to-end drag: covered_rects filters ghost: OK")
 
+        # Dragging the same element around multiple times — including
+        # back over a previously-covered area — must always leave the
+        # element selectable in the overlay.
+        wiggle_pdf = os.path.join(tmp, "wiggle.pdf")
+        d_w = fitz.open()
+        p_w = d_w.new_page(width=400, height=400)
+        p_w.insert_text((50, 100), "WIGGLE", fontsize=14)
+        d_w.save(wiggle_pdf)
+        d_w.close()
+        win.doc.open(wiggle_pdf)
+        ctrl_w = win.viewer.edit_controller
+        # Drag positions: down, back near origin, sideways, back to origin
+        target_pts = [(50, 200), (60, 110), (200, 110), (55, 105)]
+        for nx, ny in target_pts:
+            items_w = ctrl_w._items_per_page.get(0, [])
+            text_items = [e for e in items_w if isinstance(e, TextElementItem)
+                           and "WIGGLE" in e.span.text]
+            assert text_items, (
+                f"WIGGLE overlay element disappeared after a drag "
+                f"(target {nx},{ny})"
+            )
+            elem = text_items[0]
+            scene_target_x = win.viewer._page_items[0].pos().x() + nx * win.viewer.zoom
+            scene_target_y = win.viewer._page_items[0].pos().y() + ny * win.viewer.zoom
+            elem.setPos(scene_target_x, scene_target_y)
+            elem.commit_move()
+        # Final assertion: still selectable
+        items_w = ctrl_w._items_per_page.get(0, [])
+        text_items = [e for e in items_w if isinstance(e, TextElementItem)
+                       and "WIGGLE" in e.span.text]
+        assert text_items, (
+            f"WIGGLE element gone after {len(target_pts)} drags  "
+            f"covered_rects={win.doc.covered_rects(0)}"
+        )
+        print(f"[smoke] repeat drag stays selectable ({len(target_pts)} moves): OK")
+
         # Overlapping element selection: build a doc with two text
         # spans whose bboxes overlap, verify they get distinct Z-values
         # (smaller on top) so the user can reach the smaller one with
