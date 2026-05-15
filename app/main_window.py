@@ -294,6 +294,10 @@ class MainWindow(QMainWindow):
 
         # Help
         self.a_about = act("关于(&A)", self._about)
+        self.a_show_font_log = act(
+            "查看字体诊断日志(&D)…", self._show_font_log,
+            tip="显示最近的拖拽/编辑操作分别选用了哪个字体（用于排查字体替换问题）",
+        )
 
     def _build_menus(self) -> None:
         mb = self.menuBar()
@@ -457,6 +461,8 @@ class MainWindow(QMainWindow):
         m_export.addAction(self.a_extract_images)
 
         m_help = mb.addMenu("帮助(&H)")
+        m_help.addAction(self.a_show_font_log)
+        m_help.addSeparator()
         m_help.addAction(self.a_about)
 
     def _build_toolbar(self) -> None:
@@ -1338,6 +1344,65 @@ class MainWindow(QMainWindow):
         self._refresh_title()
         msg = "Language switched." if new == "en" else "语言已切换。"
         self.statusBar().showMessage(msg, 3000)
+
+    def _show_font_log(self) -> None:
+        """Open the per-session font-decision log in a viewable dialog
+        so the user can copy-paste a transcript when reporting a
+        font-drift bug.
+        """
+        log_dir = os.path.expanduser("~/Desktop")
+        if not os.path.isdir(log_dir):
+            log_dir = os.path.expanduser("~")
+        log_path = os.path.join(log_dir, "kitty_pdf_font_log.txt")
+        content = ""
+        if os.path.isfile(log_path):
+            try:
+                with open(log_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception as exc:
+                content = f"(读取日志失败: {exc})"
+        else:
+            content = (
+                f"日志文件尚未创建。\n\n"
+                f"请先打开一个 PDF，开启内容编辑模式，拖动或编辑一段文字，"
+                f"然后再次打开本对话框。\n\n"
+                f"日志位置: {log_path}"
+            )
+        from PyQt6.QtWidgets import (
+            QApplication as _QApp, QDialog, QDialogButtonBox,
+            QPlainTextEdit, QVBoxLayout, QPushButton, QHBoxLayout,
+        )
+        dlg = QDialog(self)
+        dlg.setWindowTitle("字体诊断日志")
+        dlg.resize(900, 600)
+        lay = QVBoxLayout(dlg)
+        edit = QPlainTextEdit()
+        edit.setReadOnly(True)
+        edit.setPlainText(content)
+        edit.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
+        lay.addWidget(edit, 1)
+        row = QHBoxLayout()
+        copy_btn = QPushButton("全部复制到剪贴板")
+        copy_btn.clicked.connect(
+            lambda: _QApp.clipboard().setText(content)
+        )
+        row.addWidget(copy_btn)
+        clear_btn = QPushButton("清空日志")
+        def _clear():
+            try:
+                if os.path.isfile(log_path):
+                    os.remove(log_path)
+                edit.setPlainText("(已清空)")
+            except Exception as exc:
+                edit.setPlainText(f"(清空失败: {exc})")
+        clear_btn.clicked.connect(_clear)
+        row.addWidget(clear_btn)
+        row.addStretch(1)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dlg.accept)
+        row.addWidget(close_btn)
+        lay.addLayout(row)
+        dlg.exec()
 
     def _about(self) -> None:
         if get_lang() == "en":

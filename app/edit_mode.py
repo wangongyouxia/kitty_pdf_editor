@@ -605,7 +605,8 @@ class EditController(QObject):
     # ------------------------------------------------------------------
     # Commits — called by the items themselves
     # ------------------------------------------------------------------
-    def _resolve_span_font(self, span, text: Optional[str] = None):
+    def _resolve_span_font(self, span, text: Optional[str] = None,
+                            diagnostic: Optional[dict] = None):
         """Build the ordered font-fallback chain for re-inserting text.
 
         Returns (alias, font_files) where `font_files` is a list to be
@@ -642,74 +643,141 @@ class EditController(QObject):
         has_cjk = any(ord(c) > 0xFF for c in target_text)
 
         font_files: list[str] = []
+        diag = diagnostic if diagnostic is not None else {}
+        diag["span_psname"] = span.font
+        diag["span_text"] = span.text[:60]
+        diag["span_bold"] = span.is_bold
+        diag["span_italic"] = span.is_italic
+        diag["span_size"] = span.size
+        diag["target_text"] = target_text[:60]
+        diag["is_drag"] = is_drag
+        diag["has_cjk"] = has_cjk
+        diag["candidates"] = []
 
         # 1. Original embedded font extracted from the PDF resources.
         embedded = extract_embedded_font(page, span.font)
         if embedded:
-            if is_drag or font_supports_text(embedded, target_text):
+            covers = is_drag or font_supports_text(embedded, target_text)
+            diag["candidates"].append({
+                "step": "extracted",
+                "path": embedded,
+                "added": covers,
+                "covers_text": covers,
+            })
+            if covers:
                 font_files.append(embedded)
+        else:
+            diag["candidates"].append({"step": "extracted", "path": None,
+                                        "added": False})
 
-        # 2. The SAME font but resolved on the user's system by
-        # PSName — works for many PDFs where extract_font returns
-        # an unwrappable CFF / Type-1 binary but the font is
-        # actually installed at C:\Windows\Fonts.
+        # 2. System font by PSName.
         sys_path = find_system_font_by_psname(span.font)
-        if sys_path and sys_path not in font_files:
+        added_sys = sys_path is not None and sys_path not in font_files
+        diag["candidates"].append({
+            "step": "system_by_psname", "path": sys_path,
+            "added": added_sys,
+        })
+        if added_sys:
             font_files.append(sys_path)
 
         # 3. Bundled font matched by PSName (SimSun → simsun.ttc …).
         key = pick_default_for_span(span.font, bold=span.is_bold,
                                      italic=span.is_italic)
         fdef = get_font(key)
-        if fdef and fdef.is_bundled and fdef.file:
-            if fdef.file not in font_files:
-                font_files.append(fdef.file)
+        bundled_path = (fdef.file if fdef and fdef.is_bundled else None)
+        added_bundled = (bundled_path is not None
+                         and bundled_path not in font_files)
+        diag["candidates"].append({
+            "step": "bundled_by_alias", "alias_key": key,
+            "path": bundled_path, "added": added_bundled,
+        })
+        if added_bundled:
+            font_files.append(bundled_path)
 
         # 4. CJK escalation: ensure Chinese text never falls to Helv.
+        cjk_path = None
         if has_cjk:
             cjk_key = _first_bundled_cjk(bold=span.is_bold)
             if cjk_key:
                 cjk_def = get_font(cjk_key)
-                if cjk_def and cjk_def.file and cjk_def.file not in font_files:
-                    font_files.append(cjk_def.file)
+                if cjk_def and cjk_def.file:
+                    cjk_path = cjk_def.file
+        added_cjk = (cjk_path is not None and cjk_path not in font_files)
+        diag["candidates"].append({
+            "step": "cjk_safety_net", "path": cjk_path, "added": added_cjk,
+        })
+        if added_cjk:
+            font_files.append(cjk_path)
 
         alias = fdef.base14_alias if (fdef and fdef.base14_alias) else "helv"
+        diag["alias"] = alias
+        diag["chosen_chain"] = list(font_files)
         return alias, font_files
 
-    def _report_resolved(self, span, font_files) -> None:
-        """Status-bar note + append to a debug log on the desktop so
-        the user can copy-paste a transcript if something still goes
-        wrong."""
+    def _report_resolved(self, span, font_files, diag=None) -> None:
+        """Status-bar note + append to a debug log on the desktop.
+
+        The log records every step the resolver considered so we can
+        post-mortem font-drift bugs without guessing what the user's
+        PDF looked like.
+        """
+        import datetime as _dt
         import os as _os
         if not font_files:
             label = "base-14 helv"
-            chain_summary = "(empty chain → CJK auto = msyh.ttc)"
         else:
             first = _os.path.basename(font_files[0])
             if first.startswith("kpdf_emb_"):
                 label = f"{first}  (原嵌入字体)"
             else:
                 label = first
-            chain_summary = " → ".join(_os.path.basename(p) for p in font_files)
         try:
             self.viewer.statusMessage.emit(
                 f"已用字体：{label}  ←  span PSName={span.font!r}"
             )
         except Exception:
             pass
-        # Per-session debug log (overwritten each launch via 'w' on
-        # first commit, append after that).
         try:
             log_dir = _os.path.expanduser("~/Desktop")
             if not _os.path.isdir(log_dir):
                 log_dir = _os.path.expanduser("~")
             log_path = _os.path.join(log_dir, "kitty_pdf_font_log.txt")
+            stamp = _dt.datetime.now().strftime("%H:%M:%S")
             with open(log_path, "a", encoding="utf-8") as fp:
-                fp.write(
-                    f"span PSName={span.font!r}  text={span.text[:30]!r}\n"
-                    f"  chain: {chain_summary}\n"
-                    f"  used : {label}\n\n"
-                )
+                fp.write(f"=== [{stamp}] {(diag or {}).get('op','?')} ===\n")
+                fp.write(f"  span.PSName    = {span.font!r}\n")
+                fp.write(f"  span.text      = {span.text[:60]!r}\n")
+                if diag:
+                    if "new_text" in diag:
+                        fp.write(f"  new_text       = {diag['new_text']!r}\n")
+                    fp.write(
+                        f"  bold/italic    = {diag.get('span_bold')}"
+                        f"/{diag.get('span_italic')}    "
+                        f"size = {diag.get('span_size')}\n"
+                    )
+                    fp.write(
+                        f"  has_cjk={diag.get('has_cjk')}  "
+                        f"is_drag={diag.get('is_drag')}\n"
+                    )
+                    fp.write("  Fallback chain considered:\n")
+                    for c in diag.get("candidates", []):
+                        marker = "✓" if c.get("added") else " "
+                        path = c.get("path") or "(none)"
+                        extra = ""
+                        if c.get("step") == "bundled_by_alias":
+                            extra = f"  alias_key={c.get('alias_key')!r}"
+                        if c.get("step") == "extracted":
+                            extra = f"  covers_text={c.get('covers_text')}"
+                        fp.write(
+                            f"    [{marker}] {c.get('step'):<18}  "
+                            f"{path}{extra}\n"
+                        )
+                    fp.write(
+                        f"  Final chain order:\n"
+                    )
+                    for i, p in enumerate(diag.get("chosen_chain") or []):
+                        fp.write(f"    {i+1}. {p}\n")
+                fp.write(f"  ACTUAL FONT USED: {label}\n\n")
         except Exception:
             pass
 
@@ -717,18 +785,16 @@ class EditController(QObject):
         doc = self.viewer.doc
         page = doc.page(item.span.page_index)
         bg = sample_background_color(page, item.span.rect)
-        alias, font_files = self._resolve_span_font(item.span)
+        diag: dict = {"op": "move"}
+        alias, font_files = self._resolve_span_font(item.span, diagnostic=diag)
         doc.push_undo()
         move_text_span(page, item.span, new_rect,
                        font_alias=alias, font_files=font_files,
                        background=bg)
-        # Logically delete the old position — cover_rect only painted
-        # over it; the glyphs are still in the content stream so we
-        # need to filter them out of the overlay manually.
         doc.mark_covered(item.span.page_index, item.span.rect)
         doc.mark_dirty()
         doc.pageContentChanged.emit(item.span.page_index)
-        self._report_resolved(item.span, font_files)
+        self._report_resolved(item.span, font_files, diag)
         self.refresh_page(item.span.page_index)
 
     def commit_text_delete(self, item: TextElementItem) -> None:
@@ -751,10 +817,9 @@ class EditController(QObject):
         """Replace text content keeping the original style."""
         from .text_edit import replace_span
         span = item.span
-        # Pass the NEW text so the embedded-font glyph-coverage check
-        # can fall back to a bundled font if the user typed characters
-        # the original subset doesn't have.
-        alias, font_files = self._resolve_span_font(span, text=new_text)
+        diag: dict = {"op": "replace", "new_text": new_text[:60]}
+        alias, font_files = self._resolve_span_font(span, text=new_text,
+                                                     diagnostic=diag)
         doc = self.viewer.doc
         page = doc.page(span.page_index)
         bg = sample_background_color(page, span.rect)
@@ -762,14 +827,10 @@ class EditController(QObject):
         replace_span(page, span, new_text,
                      font_alias=alias, font_files=font_files,
                      background=bg)
-        # The original span's glyphs are still in the content stream
-        # (cover_rect only painted on top). Filter them from the
-        # rebuilt overlay so we don't end up with two TextElementItems
-        # for what the user sees as a single edited span.
         doc.mark_covered(span.page_index, span.rect)
         doc.mark_dirty()
         doc.pageContentChanged.emit(span.page_index)
-        self._report_resolved(span, font_files)
+        self._report_resolved(span, font_files, diag)
         self.refresh_page(span.page_index)
 
     def commit_image_move(self, item: ImageElementItem, new_rect: fitz.Rect) -> None:
