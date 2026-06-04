@@ -49,6 +49,8 @@ public partial class App : Application
                 timer.Stop();
                 try
                 {
+                    w.SelectFirstForShot();
+                    w.UpdateLayout();
                     int pw = (int)w.ActualWidth, ph = (int)w.ActualHeight;
                     var rtb = new RenderTargetBitmap(pw, ph, 96, 96, PixelFormats.Pbgra32);
                     rtb.Render(w);

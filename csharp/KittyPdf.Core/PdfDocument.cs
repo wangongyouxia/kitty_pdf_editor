@@ -333,6 +333,23 @@ public sealed partial class PdfDocument : IDisposable
         });
 
     /// <summary>
+    /// Scale + translate an object so its current bounds (oldL..oldT) map
+    /// exactly onto newRect (PDF points, y-up).  Used for resize.  The
+    /// transform multiplies the object's matrix, so the font is preserved.
+    /// </summary>
+    public void TransformElementToRect(int pageIndex, int objectIndex,
+        double oldL, double oldB, double oldR, double oldT,
+        double newL, double newB, double newR, double newT)
+        => WithObject(pageIndex, objectIndex, (page, obj) =>
+        {
+            double ow = Math.Max(oldR - oldL, 1e-3), oh = Math.Max(oldT - oldB, 1e-3);
+            double sx = (newR - newL) / ow, sy = (newT - newB) / oh;
+            double e = newL - oldL * sx, f = newB - oldB * sy;
+            Pdfium.FPDFPageObj_Transform(obj, sx, 0, 0, sy, e, f);
+            Pdfium.FPDFPage_GenerateContent(page);
+        });
+
+    /// <summary>
     /// Set an object's affine matrix outright (used for move+scale during
     /// resize).  Matrix maps object space → page space.
     /// </summary>

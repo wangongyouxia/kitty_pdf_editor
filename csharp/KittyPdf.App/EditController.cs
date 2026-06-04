@@ -145,6 +145,8 @@ public sealed class EditController
             if (c is ElementAdorner || c is TextBox) host.Overlay.Children.RemoveAt(i);
         }
         _built.Remove(host);
+        _handles?.Dispose();
+        _handles = null;
         Selected = null;
     }
 
@@ -159,13 +161,56 @@ public sealed class EditController
     // ------------------------------------------------------------------
     // Selection
     // ------------------------------------------------------------------
+    private ResizeHandles? _handles;
+
     public void Select(ElementAdorner adorner)
     {
         if (Selected == adorner) return;
         Selected?.SetSelected(false);
+        _handles?.Dispose();
+        _handles = null;
         Selected = adorner;
         adorner.SetSelected(true);
         _inspector.Show(adorner);
+        var host = FindHost(adorner);
+        if (host != null && Tool == DrawTool.Select)
+            _handles = new ResizeHandles(this, host, adorner);
+    }
+
+    /// <summary>Test hook: select the first element on a page (for screenshots).</summary>
+    public bool SelectFirst(PageHost host)
+    {
+        if (_adorners.TryGetValue(host, out var list) && list.Count > 0)
+        {
+            Select(list[0]);
+            return true;
+        }
+        return false;
+    }
+
+    public void ClearSelectionVisuals()
+    {
+        _handles?.Dispose();
+        _handles = null;
+        Selected?.SetSelected(false);
+        Selected = null;
+    }
+
+    public void RepositionHandles() => _handles?.Reposition();
+
+    /// <summary>Commit a resize: map the adorner's new screen rect to PDF.</summary>
+    public void CommitResize(ElementAdorner adorner, double newLeftPx, double newTopPx,
+        double newWpx, double newHpx)
+    {
+        var el = adorner.Element;
+        double z = adorner.Zoom, pageH = adorner.PageHeightPt;
+        double newL = newLeftPx / z;
+        double newR = (newLeftPx + newWpx) / z;
+        double newT = pageH - newTopPx / z;
+        double newB = pageH - (newTopPx + newHpx) / z;
+        int page = el.PageIndex, idx = el.Index;
+        double oldL = el.Left, oldB = el.Bottom, oldR = el.Right, oldT = el.Top;
+        _session.Mutate(d => d.TransformElementToRect(page, idx, oldL, oldB, oldR, oldT, newL, newB, newR, newT));
     }
 
     // ------------------------------------------------------------------

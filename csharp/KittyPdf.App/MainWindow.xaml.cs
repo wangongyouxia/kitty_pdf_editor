@@ -200,6 +200,13 @@ public partial class MainWindow : Window
 
     public ContentControl InspectorSlot => InspectorHost;
 
+    /// <summary>Test hook for --shot: select the first element on page 0.</summary>
+    public bool SelectFirstForShot()
+    {
+        if (_edit == null || _hosts.Count == 0) return false;
+        return _edit.SelectFirst(_hosts[0]);
+    }
+
     // ------------------------------------------------------------------
     // Drawing tools
     // ------------------------------------------------------------------

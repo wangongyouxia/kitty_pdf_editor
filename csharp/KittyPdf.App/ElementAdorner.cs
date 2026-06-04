@@ -49,6 +49,8 @@ public sealed class ElementAdorner : Border
         => s == null ? "" : (s.Length > 40 ? s[..40] + "…" : s);
 
     public double Zoom => _host.Zoom;
+    public double PageHeightPt => _host.PageHeightPt;
+    public PageHost Host => _host;
 
     /// <summary>Position the box from the element's PDF bounds (y-up → y-down).</summary>
     public void Place()
@@ -103,6 +105,7 @@ public sealed class ElementAdorner : Border
         if (Math.Abs(dx) > 1 || Math.Abs(dy) > 1) _movedDuringDrag = true;
         Canvas.SetLeft(this, _startLeft + dx);
         Canvas.SetTop(this, _startTop + dy);
+        _ctrl.RepositionHandles();
     }
 
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs e)
