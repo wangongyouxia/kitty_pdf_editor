@@ -37,6 +37,7 @@ public static class Localizer
         ["导出每页图片…"] = "Export Page Images…", ["关于"] = "About", ["赞赏支持"] = "Donate",
         // toolbar row 1
         ["打开"] = "Open", ["另存为"] = "Save As", ["✏ 编辑内容"] = "✏ Edit", ["适合宽度"] = "Fit Width",
+        ["❤ 赞赏"] = "❤ Donate",
         // tool strip
         ["选择"] = "Select", ["▭ 矩形"] = "▭ Rect", ["◯ 椭圆"] = "◯ Ellipse", ["／ 直线"] = "／ Line",
         ["➜ 箭头"] = "➜ Arrow", ["▥ 高亮"] = "▥ Highlight", ["✎ 画笔"] = "✎ Pen", ["🅣 文字"] = "🅣 Text",

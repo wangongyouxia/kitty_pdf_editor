@@ -36,6 +36,31 @@ public partial class App : Application
             return;
         }
 
+        if (e.Args.Length >= 2 && e.Args[0] == "--donate")
+        {
+            var dw = new DonateWindow();
+            dw.Show();
+            var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                try
+                {
+                    int pw = (int)dw.ActualWidth, ph = (int)dw.ActualHeight;
+                    var rtb = new RenderTargetBitmap(Math.Max(1, pw), Math.Max(1, ph), 96, 96, PixelFormats.Pbgra32);
+                    rtb.Render(dw);
+                    var enc = new PngBitmapEncoder();
+                    enc.Frames.Add(BitmapFrame.Create(rtb));
+                    using var fs = File.Create(e.Args[1]);
+                    enc.Save(fs);
+                }
+                catch { }
+                Shutdown();
+            };
+            timer.Start();
+            return;
+        }
+
         if (e.Args.Length >= 3 && e.Args[0] == "--shot")
         {
             var w = new MainWindow { Width = 1180, Height = 820 };

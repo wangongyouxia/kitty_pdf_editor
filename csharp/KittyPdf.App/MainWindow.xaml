@@ -72,6 +72,9 @@
                            Width="48" TextAlignment="Center"/>
                 <Button Content="+" Click="OnZoomIn" Padding="10,4" Margin="2,0" FontWeight="Bold"/>
                 <Button Content="适合宽度" Click="OnFitWidth" Padding="10,4" Margin="2,0"/>
+                <Separator/>
+                <Button x:Name="BtnDonate" Content="❤ 赞赏" Click="OnDonate" Padding="10,4" Margin="2,0"
+                        Foreground="#D33" FontWeight="Bold"/>
             </ToolBar>
             <ToolBar Band="1" ClipToBounds="False">
                 <RadioButton x:Name="ToolSelect" GroupName="tool" Content="选择" Tag="Select"
