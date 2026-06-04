@@ -36,6 +36,10 @@
                 <Separator/>
                 <MenuItem Header="添加文字水印…" Click="OnWatermark"/>
                 <MenuItem Header="添加页码…" Click="OnPageNumbers"/>
+                <Separator/>
+                <MenuItem Header="加密（设置密码）…" Click="OnEncrypt"/>
+                <MenuItem Header="移除密码…" Click="OnDecrypt"/>
+                <MenuItem Header="文档属性…" Click="OnMetadata"/>
             </MenuItem>
             <MenuItem Header="工具(_T)">
                 <MenuItem Header="搜索…" Click="OnSearch"/>

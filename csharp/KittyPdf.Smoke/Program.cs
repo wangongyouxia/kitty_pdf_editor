@@ -256,6 +256,33 @@ using (var d = PdfDocument.Load(three))
     Check(r.GetPageText(0).Contains("DRAFT"), "watermark text present on page 0");
 }
 
+// ---- Metadata (PdfSharp). ----
+{
+    var info = new PdfSharpOps.DocInfo("我的标题", "作者", "主题", "kw", "KittyPDF");
+    byte[] withInfo = PdfSharpOps.SetInfo(three, info);
+    var read = PdfSharpOps.GetInfo(withInfo);
+    Check(read.Title == "我的标题" && read.Author == "作者", $"metadata round-trips (got '{read.Title}'/'{read.Author}')");
+}
+
+// ---- Encrypt + decrypt (PdfSharp). ----
+{
+    string enc = Path.Combine(Path.GetTempPath(), "kpdf_enc_test.pdf");
+    PdfSharpOps.EncryptToFile(three, enc, "secret", "boss", allowPrint: false);
+    byte[] encBytes = File.ReadAllBytes(enc);
+    bool decrypted = false, blockedWithout = false;
+    try
+    {
+        byte[] clear = PdfSharpOps.DecryptToBytes(encBytes, "boss");  // owner pw
+        using var r = PdfDocument.Load(clear);                        // unencrypted now
+        decrypted = r.PageCount == 3;
+    }
+    catch (Exception ex) { Console.WriteLine("   decrypt err: " + ex.Message); }
+    try { PdfDocument.Load(encBytes); } catch { blockedWithout = true; }
+    Check(decrypted, "encrypted file decrypts with owner password → valid PDF");
+    Check(blockedWithout, "encrypted file blocks loading without password");
+    try { File.Delete(enc); } catch { }
+}
+
 Console.WriteLine();
 Console.WriteLine(failures == 0 ? "ALL ENGINE TESTS PASSED" : $"{failures} CHECK(S) FAILED");
 return failures == 0 ? 0 : 1;

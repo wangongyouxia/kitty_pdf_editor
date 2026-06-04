@@ -45,7 +45,14 @@ public partial class MainWindow : Window
     public void OpenPath(string path)
     {
         try { _session.Open(path); }
-        catch (Exception ex) { ShowError("打开失败：" + ex.Message); }
+        catch
+        {
+            // Likely password-protected — prompt and retry.
+            string? pw = InputDialog.Prompt(this, "需要密码", "该 PDF 已加密，请输入密码：", "");
+            if (pw == null) return;
+            try { _session.Open(path, pw); }
+            catch (Exception ex) { ShowError("打开失败：" + ex.Message); }
+        }
     }
 
     private void OnSave(object sender, RoutedEventArgs e)
@@ -461,6 +468,54 @@ public partial class MainWindow : Window
         string? fmt = InputDialog.Prompt(this, "添加页码", "格式（{page} 当前页，{total} 总页）：", "{page} / {total}");
         if (fmt == null) return;
         _session.Mutate(d => d.AddPageNumbers(fmt));
+    }
+
+    // ------------------------------------------------------------------
+    // Menu: security + metadata (PdfSharp-backed)
+    // ------------------------------------------------------------------
+    private void OnEncrypt(object sender, RoutedEventArgs e)
+    {
+        if (!RequireOpen()) return;
+        string? userPw = InputDialog.Prompt(this, "加密", "打开密码（用户密码，可留空）：", "");
+        if (userPw == null) return;
+        string? ownerPw = InputDialog.Prompt(this, "加密", "权限密码（所有者密码，用于解除限制）：", userPw);
+        if (ownerPw == null) return;
+        var save = new Microsoft.Win32.SaveFileDialog { Filter = "PDF (*.pdf)|*.pdf", FileName = "加密.pdf" };
+        if (save.ShowDialog(this) != true) return;
+        try
+        {
+            PdfSharpOps.EncryptToFile(_session.Document.SaveToBytes(), save.FileName, userPw, ownerPw);
+            MessageBox.Show(this, "已加密保存（AES-256）。", "加密");
+        }
+        catch (Exception ex) { ShowError("加密失败：" + ex.Message); }
+    }
+
+    private void OnDecrypt(object sender, RoutedEventArgs e)
+    {
+        var pick = new OpenFileDialog { Filter = "PDF (*.pdf)|*.pdf", Title = "选择加密的 PDF" };
+        if (pick.ShowDialog(this) != true) return;
+        string? pw = InputDialog.Prompt(this, "移除密码", "请输入所有者密码：", "");
+        if (pw == null) return;
+        var save = new Microsoft.Win32.SaveFileDialog { Filter = "PDF (*.pdf)|*.pdf", FileName = "已解密.pdf" };
+        if (save.ShowDialog(this) != true) return;
+        try
+        {
+            byte[] clear = PdfSharpOps.DecryptToBytes(File.ReadAllBytes(pick.FileName), pw);
+            File.WriteAllBytes(save.FileName, clear);
+            MessageBox.Show(this, "已移除密码。", "移除密码");
+        }
+        catch (Exception ex) { ShowError("移除失败（密码错误或不支持）：" + ex.Message); }
+    }
+
+    private void OnMetadata(object sender, RoutedEventArgs e)
+    {
+        if (!RequireOpen()) return;
+        PdfSharpOps.DocInfo info;
+        try { info = PdfSharpOps.GetInfo(_session.Document.SaveToBytes()); }
+        catch (Exception ex) { ShowError("读取属性失败：" + ex.Message); return; }
+        var dlg = new MetadataWindow(info) { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        _session.MutateReplace(d => PdfSharpOps.SetInfo(d.SaveToBytes(), dlg.Result));
     }
 
     // ------------------------------------------------------------------

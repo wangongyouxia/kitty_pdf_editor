@@ -32,9 +32,9 @@ public sealed class PdfSession : IDisposable
     public PdfDocument Document =>
         _doc ?? throw new InvalidOperationException("no document open");
 
-    public void Open(string path)
+    public void Open(string path, string? password = null)
     {
-        var doc = PdfDocument.Open(path);
+        var doc = PdfDocument.Open(path, password);
         _doc?.Dispose();
         _doc = doc;
         Path = path;

@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="bblanchon.PDFium.Win32" Version="150.0.7869" />
+    <PackageReference Include="PdfSharp" Version="6.2.4" />
   </ItemGroup>
 
 </Project>
