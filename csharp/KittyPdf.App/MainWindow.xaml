@@ -67,6 +67,26 @@
                 <Button Content="+" Click="OnZoomIn" Padding="10,4" Margin="2,0" FontWeight="Bold"/>
                 <Button Content="适合宽度" Click="OnFitWidth" Padding="10,4" Margin="2,0"/>
             </ToolBar>
+            <ToolBar Band="1" ClipToBounds="False">
+                <RadioButton x:Name="ToolSelect" GroupName="tool" Content="选择" Tag="Select"
+                             IsChecked="True" Click="OnToolPick" Margin="2,0"/>
+                <Separator/>
+                <RadioButton GroupName="tool" Content="▭ 矩形" Tag="Rect" Click="OnToolPick" Margin="2,0"/>
+                <RadioButton GroupName="tool" Content="◯ 椭圆" Tag="Ellipse" Click="OnToolPick" Margin="2,0"/>
+                <RadioButton GroupName="tool" Content="／ 直线" Tag="Line" Click="OnToolPick" Margin="2,0"/>
+                <RadioButton GroupName="tool" Content="➜ 箭头" Tag="Arrow" Click="OnToolPick" Margin="2,0"/>
+                <RadioButton GroupName="tool" Content="▥ 高亮" Tag="Highlight" Click="OnToolPick" Margin="2,0"/>
+                <RadioButton GroupName="tool" Content="✎ 画笔" Tag="Ink" Click="OnToolPick" Margin="2,0"/>
+                <RadioButton GroupName="tool" Content="🅣 文字" Tag="Text" Click="OnToolPick" Margin="2,0"/>
+                <Separator/>
+                <Button Content="🖼 图片" Click="OnInsertImage" Padding="8,4" Margin="2,0"/>
+                <Button Content="✍ 签名" Click="OnSignature" Padding="8,4" Margin="2,0"/>
+                <Separator/>
+                <TextBlock Text="颜色" VerticalAlignment="Center" Margin="4,0,2,0"/>
+                <ComboBox x:Name="StrokeColorBox" Width="76" SelectionChanged="OnStrokeColorChanged"/>
+                <TextBlock Text="粗细" VerticalAlignment="Center" Margin="8,0,2,0"/>
+                <ComboBox x:Name="StrokeWidthBox" Width="52" SelectionChanged="OnStrokeWidthChanged"/>
+            </ToolBar>
         </ToolBarTray>
 
         <Grid>

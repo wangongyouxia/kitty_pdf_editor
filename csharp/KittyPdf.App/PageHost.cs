@@ -19,6 +19,7 @@ public sealed class PageHost : Border
     private readonly PdfSession _session;
     private readonly Image _image;
     public Canvas Overlay { get; }
+    public DrawingLayer Draw { get; }
     public int PageIndex { get; }
 
     public double PageWidthPt { get; }
@@ -51,6 +52,9 @@ public sealed class PageHost : Border
         };
         RenderOptions.SetBitmapScalingMode(_image, BitmapScalingMode.HighQuality);
         Overlay = new Canvas { Background = Brushes.Transparent };
+        Draw = new DrawingLayer(this) { IsHitTestVisible = false };
+        Panel.SetZIndex(Draw, 50000);
+        Overlay.Children.Add(Draw);
         grid.Children.Add(_image);
         grid.Children.Add(Overlay);
         Child = grid;
@@ -63,6 +67,8 @@ public sealed class PageHost : Border
         Zoom = zoom;
         Width = PageWidthPt * zoom;
         Height = PageHeightPt * zoom;
+        Draw.Width = Width;
+        Draw.Height = Height;
         _rendered = false;
         _image.Source = null;
     }

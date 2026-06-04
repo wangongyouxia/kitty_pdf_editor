@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        InitToolStrip();
         _session.Changed += OnDocumentChanged;
         _session.DirtyChanged += _ => UpdateTitle();
         UpdateCommandStates();
@@ -191,6 +192,106 @@ public partial class MainWindow : Window
     }
 
     public ContentControl InspectorSlot => InspectorHost;
+
+    // ------------------------------------------------------------------
+    // Drawing tools
+    // ------------------------------------------------------------------
+    private static readonly (string name, Color color)[] StrokeColors =
+    {
+        ("红", Colors.Red), ("黑", Colors.Black), ("蓝", Colors.Blue),
+        ("绿", Color.FromRgb(0, 150, 0)), ("黄", Color.FromRgb(255, 210, 0)),
+        ("橙", Colors.Orange),
+    };
+
+    private void InitToolStrip()
+    {
+        foreach (var (name, _) in StrokeColors) StrokeColorBox.Items.Add(name);
+        StrokeColorBox.SelectedIndex = 0;
+        foreach (var w in new[] { "1", "2", "3", "5", "8" }) StrokeWidthBox.Items.Add(w);
+        StrokeWidthBox.SelectedIndex = 1;
+    }
+
+    private void EnsureEditActive()
+    {
+        if (_edit == null) _edit = new EditController(this, _session);
+        if (!_edit.IsActive)
+        {
+            _edit.Rebuild(_hosts);
+            BtnEdit.IsChecked = true;
+            MenuEdit.IsChecked = true;
+            _edit.SetActive(true);
+            RenderVisible();
+        }
+    }
+
+    private void OnToolPick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not RadioButton rb || rb.Tag is not string tag) return;
+        if (!_session.IsOpen) { ToolSelect.IsChecked = true; return; }
+        EnsureEditActive();
+        if (Enum.TryParse<DrawTool>(tag, out var tool))
+            _edit!.SetTool(tool);
+    }
+
+    private void OnStrokeColorChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_edit != null && StrokeColorBox.SelectedIndex >= 0)
+            _edit.StrokeColor = StrokeColors[StrokeColorBox.SelectedIndex].color;
+    }
+
+    private void OnStrokeWidthChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_edit != null && StrokeWidthBox.SelectedItem is string s && double.TryParse(s, out double w))
+            _edit.StrokeWidth = w;
+    }
+
+    private void OnInsertImage(object sender, RoutedEventArgs e)
+    {
+        if (!RequireOpen()) return;
+        var dlg = new OpenFileDialog { Filter = "图片 (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp" };
+        if (dlg.ShowDialog(this) != true) return;
+        if (!LoadImageAsPending(dlg.FileName)) { ShowError("无法读取图片。"); return; }
+        EnsureEditActive();
+        _edit!.SetTool(DrawTool.Image);
+        MessageBox.Show(this, "在页面上点击以放置图片。", "插入图片");
+    }
+
+    private void OnSignature(object sender, RoutedEventArgs e)
+    {
+        if (!RequireOpen()) return;
+        var win = new SignatureWindow { Owner = this };
+        if (win.ShowDialog() != true || win.ResultBgra == null) return;
+        _edit ??= new EditController(this, _session);
+        _edit.PendingImageBgra = win.ResultBgra;
+        _edit.PendingImageW = win.ResultW;
+        _edit.PendingImageH = win.ResultH;
+        EnsureEditActive();
+        _edit.SetTool(DrawTool.Image);
+        MessageBox.Show(this, "在页面上点击以放置签名。", "签名");
+    }
+
+    private bool LoadImageAsPending(string path)
+    {
+        try
+        {
+            var bmp = new System.Windows.Media.Imaging.BitmapImage();
+            bmp.BeginInit();
+            bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+            bmp.UriSource = new Uri(path);
+            bmp.EndInit();
+            var conv = new System.Windows.Media.Imaging.FormatConvertedBitmap(
+                bmp, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+            int w = conv.PixelWidth, h = conv.PixelHeight, stride = w * 4;
+            var px = new byte[stride * h];
+            conv.CopyPixels(px, stride, 0);
+            _edit ??= new EditController(this, _session);
+            _edit.PendingImageBgra = px;
+            _edit.PendingImageW = w;
+            _edit.PendingImageH = h;
+            return true;
+        }
+        catch { return false; }
+    }
 
     // ------------------------------------------------------------------
     // Menu: misc

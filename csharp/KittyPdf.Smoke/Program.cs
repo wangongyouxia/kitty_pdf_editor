@@ -50,6 +50,21 @@ if (args.Length >= 1 && File.Exists(args[0]))
         return 0;
     }
 
+    // `<pdf> draw` — stamp shapes on page 0 and write <pdf>.draw.pdf.
+    if (args.Length >= 2 && args[1] == "draw")
+    {
+        using var doc = PdfDocument.Open(args[0]);
+        doc.AddRect(0, 40, 40, 120, 60, new PdfDocument.Rgba(0.8, 0, 0, 1),
+            new PdfDocument.Rgba(1, 1, 0, 0.3), 2);
+        doc.AddEllipse(0, 250, 70, 50, 30, new PdfDocument.Rgba(0, 0, 0.8, 1), null, 2);
+        doc.AddLine(0, 40, 160, 360, 200, new PdfDocument.Rgba(0, 0.6, 0, 1), 2, arrow: true);
+        doc.AddInk(0, new[] { new (double, double)[] { (40, 230), (80, 250), (120, 230), (160, 255) } },
+            new PdfDocument.Rgba(0.6, 0, 0.6, 1), 2);
+        doc.SaveToFile(args[0] + ".draw.pdf");
+        Console.WriteLine("wrote " + args[0] + ".draw.pdf");
+        return 0;
+    }
+
     // `<pdf> wm <text>` — add a CJK-capable watermark + page numbers and
     // write <pdf>.wm.pdf (for visual CID-font verification).
     if (args.Length >= 3 && args[1] == "wm")

@@ -27,6 +27,26 @@ public sealed class EditController
 
     public ElementAdorner? Selected { get; private set; }
 
+    // ---- Drawing tool state ----
+    public DrawTool Tool { get; private set; } = DrawTool.Select;
+    public Color StrokeColor { get; set; } = Colors.Red;
+    public double StrokeWidth { get; set; } = 2.0;
+    public byte[]? PendingImageBgra { get; set; }  // for image/signature placement
+    public int PendingImageW { get; set; }
+    public int PendingImageH { get; set; }
+
+    public event Action? ToolChanged;
+
+    public void SetTool(DrawTool tool)
+    {
+        Tool = tool;
+        foreach (var list in _adorners.Values)
+            foreach (var a in list)
+                a.IsHitTestVisible = tool == DrawTool.Select;
+        foreach (var h in _built) h.Draw.IsHitTestVisible = tool != DrawTool.Select;
+        ToolChanged?.Invoke();
+    }
+
     public EditController(MainWindow window, PdfSession session)
     {
         _window = window;
@@ -81,6 +101,9 @@ public sealed class EditController
 
     private void BuildPage(PageHost host)
     {
+        host.Draw.Controller = this;
+        host.Draw.IsHitTestVisible = Tool != DrawTool.Select;
+
         var list = new List<ElementAdorner>();
         IReadOnlyList<PdfElement> els;
         try { els = _session.Document.GetElements(host.PageIndex); }
@@ -92,7 +115,7 @@ public sealed class EditController
             if (el.Kind != PdfElementKind.Text && el.Kind != PdfElementKind.Image)
                 continue; // skip paths/shadings for now — not directly editable
             if (el.Width <= 0 || el.Height <= 0) continue;
-            var a = new ElementAdorner(this, host, el);
+            var a = new ElementAdorner(this, host, el) { IsHitTestVisible = Tool == DrawTool.Select };
             host.Overlay.Children.Add(a);
             list.Add(a);
         }
@@ -115,10 +138,14 @@ public sealed class EditController
             foreach (var a in list) host.Overlay.Children.Remove(a);
             _adorners.Remove(host);
         }
-        host.Overlay.Children.Clear();
+        // Remove leftover adorners / inline editors but KEEP the DrawingLayer.
+        for (int i = host.Overlay.Children.Count - 1; i >= 0; i--)
+        {
+            var c = host.Overlay.Children[i];
+            if (c is ElementAdorner || c is TextBox) host.Overlay.Children.RemoveAt(i);
+        }
         _built.Remove(host);
-        if (Selected != null && !host.Overlay.Children.Contains(Selected))
-            Selected = null;
+        Selected = null;
     }
 
     public void Clear()
@@ -227,4 +254,42 @@ public sealed class EditController
             if (kv.Value.Contains(adorner)) return kv.Key;
         return null;
     }
+
+    // ------------------------------------------------------------------
+    // Drawing commits.  The DrawingLayer passes PDF-point coordinates.
+    // ------------------------------------------------------------------
+    private PdfDocument.Rgba Stroke =>
+        new(StrokeColor.R / 255.0, StrokeColor.G / 255.0, StrokeColor.B / 255.0, 1.0);
+
+    public void CommitRect(int page, double x, double y, double w, double h)
+        => _session.Mutate(d => d.AddRect(page, x, y, w, h, Stroke, null, StrokeWidth));
+
+    public void CommitEllipse(int page, double cx, double cy, double rx, double ry)
+        => _session.Mutate(d => d.AddEllipse(page, cx, cy, rx, ry, Stroke, null, StrokeWidth));
+
+    public void CommitLine(int page, double x1, double y1, double x2, double y2, bool arrow)
+        => _session.Mutate(d => d.AddLine(page, x1, y1, x2, y2, Stroke, StrokeWidth, arrow));
+
+    public void CommitHighlight(int page, double x, double y, double w, double h)
+        => _session.Mutate(d => d.AddHighlight(page, x, y, w, h,
+            (StrokeColor.R / 255.0, StrokeColor.G / 255.0, StrokeColor.B / 255.0)));
+
+    public void CommitInk(int page, IReadOnlyList<IReadOnlyList<(double, double)>> strokes)
+        => _session.Mutate(d => d.AddInk(page, strokes, Stroke, StrokeWidth));
+
+    public void CommitInsertText(int page, double x, double y, string text, double sizePt)
+        => _session.Mutate(d => d.InsertText(page, text, x, y, sizePt,
+            (StrokeColor.R / 255.0, StrokeColor.G / 255.0, StrokeColor.B / 255.0, 1.0)));
+
+    public void CommitInsertImage(int page, double x, double y, double w, double h)
+    {
+        if (PendingImageBgra == null) return;
+        var bytes = PendingImageBgra; int iw = PendingImageW, ih = PendingImageH;
+        _session.Mutate(d => d.InsertImage(page, bytes, iw, ih, x, y, w, h));
+    }
+}
+
+public enum DrawTool
+{
+    Select, Rect, Ellipse, Line, Arrow, Highlight, Ink, Text, Image,
 }

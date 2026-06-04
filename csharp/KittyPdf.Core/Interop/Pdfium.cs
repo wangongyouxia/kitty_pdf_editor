@@ -181,6 +181,45 @@ internal static unsafe class Pdfium
     [DllImport(Dll, CallingConvention = Conv)]
     public static extern void FPDFPage_InsertObject(IntPtr page, IntPtr page_obj);
 
+    // ---- Path / shape objects ----
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern IntPtr FPDFPageObj_CreateNewRect(float x, float y, float w, float h);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern IntPtr FPDFPageObj_CreateNewPath(float x, float y);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDFPath_MoveTo(IntPtr path, float x, float y);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDFPath_LineTo(IntPtr path, float x, float y);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDFPath_BezierTo(IntPtr path, float x1, float y1,
+        float x2, float y2, float x3, float y3);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDFPath_Close(IntPtr path);
+
+    // fillmode: 0 none, 1 alternate, 2 winding.  stroke: outline on/off.
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDFPath_SetDrawMode(IntPtr path, int fillmode, bool stroke);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDFPageObj_SetStrokeColor(IntPtr page_object,
+        uint R, uint G, uint B, uint A);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDFPageObj_SetStrokeWidth(IntPtr page_object, float width);
+
+    // ---- Image objects ----
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern IntPtr FPDFPageObj_NewImageObj(IntPtr document);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDFImageObj_SetBitmap(IntPtr[]? pages, int count,
+        IntPtr image_object, IntPtr bitmap);
+
     [DllImport(Dll, CallingConvention = Conv)]
     public static extern bool FPDFPage_GenerateContent(IntPtr page);
 
