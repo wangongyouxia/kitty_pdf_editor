@@ -59,7 +59,7 @@ if (args.Length >= 1 && File.Exists(args[0]))
         var target = doc.GetElements(0).First(e => e.Index == idx && e.Kind == PdfElementKind.Text);
         string newText = (target.Text ?? "") + args[3];   // append suffix (ASCII-safe on CLI)
         Console.WriteLine($"old='{target.Text}' font={target.FontName}");
-        doc.EditText(0, idx, newText, target.Text ?? "", target.FontName, target.FontSize, target.IsBold);
+        doc.EditText(0, idx, newText, target.Text ?? "", target.FontName, target.FontSize, target.IsBold, target.IsItalic);
         doc.SaveToFile(args[0] + ".edit.pdf");
         Console.WriteLine("wrote " + args[0] + ".edit.pdf");
         return 0;

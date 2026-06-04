@@ -101,7 +101,7 @@ foreach (var (font, old, neu) in subsetCases)
     byte[] doc = MakeLatin(font, old, 60, 100);
     PdfElement b; using (var d = PdfDocument.Load(doc)) b = Texts(d).First();
     byte[] ed;
-    using (var d = PdfDocument.Load(doc)) { d.EditText(0, b.Index, neu, old, b.FontName, b.FontSize, b.IsBold); ed = d.SaveToBytes(); }
+    using (var d = PdfDocument.Load(doc)) { d.EditText(0, b.Index, neu, old, b.FontName, b.FontSize, b.IsBold, b.IsItalic); ed = d.SaveToBytes(); }
     using var r = PdfDocument.Load(ed);
     var ts = Texts(r);
     Check(ts.Count == 1 && ts[0].Text == neu, $"edit[{font}] '{old}'→'{neu}' text set (1 run)");
@@ -109,47 +109,48 @@ foreach (var (font, old, neu) in subsetCases)
 }
 
 // ======================================================================
-Section("D. Text APPEND on CJK subset: original run UNTOUCHED, suffix family-matched");
+Section("D. Text APPEND on CJK subset: ONE element, family-matched font, pos kept");
 var cjk = FixBytes("cjk_subset.pdf");
-var cjkRuns = new (string token, string famToken)[]
+var cjkRuns = new (string token, string famToken, string expectFont)[]
 {
-    ("粗体标题示例", "yahei"), ("宋体正文内容", "sun"), ("仿宋公文样式", "fang"),
-    ("黑体小标题", "hei"), ("楷体注释文字", "kai"),
+    ("粗体标题示例", "yahei", "yahei"), ("宋体正文内容", "sun", "simsun"), ("仿宋公文样式", "fang", "fangsong"),
+    ("黑体小标题", "hei", "simhei"), ("楷体注释文字", "kai", "kaiti"),
 };
-foreach (var (token, famToken) in cjkRuns)
+string NormName(string? s) => PdfDocument.NormalizeFontName(s);
+foreach (var (token, famToken, expectFont) in cjkRuns)
 {
     PdfElement orig;
     using (var d = PdfDocument.Load(cjk)) orig = Texts(d).First(e => (e.Text ?? "").Contains(token));
     int beforeCount; using (var d = PdfDocument.Load(cjk)) beforeCount = Texts(d).Count;
     string newText = (orig.Text ?? "") + "X";
     byte[] ed;
-    using (var d = PdfDocument.Load(cjk)) { d.EditText(0, orig.Index, newText, orig.Text ?? "", orig.FontName, orig.FontSize, orig.IsBold); ed = d.SaveToBytes(); }
+    using (var d = PdfDocument.Load(cjk)) { d.EditText(0, orig.Index, newText, orig.Text ?? "", orig.FontName, orig.FontSize, orig.IsBold, orig.IsItalic); ed = d.SaveToBytes(); }
     using var r = PdfDocument.Load(ed);
     var ts = Texts(r);
-    var keep = ts.FirstOrDefault(e => e.Text == orig.Text);
-    var suffix = ts.FirstOrDefault(e => e.Text == "X");
-    Check(ts.Count == beforeCount + 1, $"append[{famToken}] split into +1 run (got {ts.Count} vs {beforeCount})");
-    Check(keep != null && keep.FontName == orig.FontName && Math.Abs(keep.Left - orig.Left) < 1 && Math.Abs(keep.Bottom - orig.Bottom) < 1,
-        $"append[{famToken}] original run untouched (font+pos)");
-    Check(suffix != null && !string.IsNullOrEmpty(suffix.FontName) &&
-          !suffix.FontName!.Contains("Helvetica", StringComparison.OrdinalIgnoreCase),
-        $"append[{famToken}] suffix uses a real font ({suffix?.FontName})");
+    var run = ts.FirstOrDefault(e => e.Text == newText);
+    Check(ts.Count == beforeCount, $"append[{famToken}] stays ONE element (count {ts.Count} == {beforeCount})");
+    Check(run != null, $"append[{famToken}] run holds full new text '{newText}'");
+    Check(run != null && Math.Abs(run.Left - orig.Left) < 1 && Math.Abs(run.Bottom - orig.Bottom) < 2,
+        $"append[{famToken}] position kept");
+    Check(run != null && NormName(run.FontName).Contains(expectFont),
+        $"append[{famToken}] font family matched ({run?.FontName})");
 }
 
 // ======================================================================
-Section("E. Text full REPLACE on CJK subset rebuilds in a CJK font");
-foreach (var (token, famToken) in cjkRuns.Take(4))
+Section("E. Text full REPLACE on CJK subset rebuilds in matched family (one element)");
+foreach (var (token, famToken, expectFont) in cjkRuns.Take(4))
 {
     PdfElement orig;
     using (var d = PdfDocument.Load(cjk)) orig = Texts(d).First(e => (e.Text ?? "").Contains(token));
+    int beforeCount; using (var d = PdfDocument.Load(cjk)) beforeCount = Texts(d).Count;
     string newText = "全新内容";
     byte[] ed;
-    using (var d = PdfDocument.Load(cjk)) { d.EditText(0, orig.Index, newText, orig.Text ?? "", orig.FontName, orig.FontSize, orig.IsBold); ed = d.SaveToBytes(); }
+    using (var d = PdfDocument.Load(cjk)) { d.EditText(0, orig.Index, newText, orig.Text ?? "", orig.FontName, orig.FontSize, orig.IsBold, orig.IsItalic); ed = d.SaveToBytes(); }
     using var r = PdfDocument.Load(ed);
-    var rep = Texts(r).FirstOrDefault(e => e.Text == newText);
-    Check(rep != null, $"replace[{famToken}] new text present");
-    Check(rep != null && !rep.FontName!.Contains("Helvetica", StringComparison.OrdinalIgnoreCase),
-        $"replace[{famToken}] rebuilt with CJK font ({rep?.FontName})");
+    var ts = Texts(r);
+    var rep = ts.FirstOrDefault(e => e.Text == newText);
+    Check(ts.Count == beforeCount, $"replace[{famToken}] stays ONE element");
+    Check(rep != null && NormName(rep.FontName).Contains(expectFont), $"replace[{famToken}] family matched ({rep?.FontName})");
 }
 
 // ======================================================================
@@ -364,6 +365,47 @@ for (int k = 0; k < 4; k++)
     byte[] r2; using (var d = PdfDocument.Load(r1)) r2 = d.SaveToBytes();
     using var r = PdfDocument.Load(r2);
     Check(r.PageCount == 1 && Texts(r).Count == 1 && Texts(r)[0].Text == "RoundTrip", $"round-trip {k} stable");
+}
+
+// ======================================================================
+Section("N. Latin subset edit: ONE element, family + bold matched (user's case)");
+var latin = FixBytes("latin_subset.pdf");
+{
+    // Append "s" to subset "Anti-productive" (Times New Roman Bold).
+    PdfElement orig; using (var d = PdfDocument.Load(latin)) orig = Texts(d).First(e => (e.Text ?? "").Contains("Anti"));
+    int before; using (var d = PdfDocument.Load(latin)) before = Texts(d).Count;
+    string nt = (orig.Text ?? "") + "s";
+    byte[] ed; using (var d = PdfDocument.Load(latin)) { d.EditText(0, orig.Index, nt, orig.Text ?? "", orig.FontName, orig.FontSize, orig.IsBold, orig.IsItalic); ed = d.SaveToBytes(); }
+    using var r = PdfDocument.Load(ed); var ts = Texts(r);
+    // (the fixture's hyphen is U+00AD; the rebuild normalises it, so match
+    // on the stable substring rather than the exact string)
+    var run = ts.FirstOrDefault(e => (e.Text ?? "").Contains("Anti"));
+    Check(ts.Count == before, $"latin append 's' stays ONE element ({ts.Count}=={before})");
+    Check(run != null && run.Text!.Contains("productive") && run.Text!.EndsWith("s"),
+        $"latin append run holds full text ({run?.Text})");
+    Check(run != null && NormName(run.FontName).Contains("times"), $"latin append matched Times ({run?.FontName})");
+    Check(run != null && run.IsBold, $"latin append kept BOLD ({run?.FontName})");
+    Check(run != null && Math.Abs(run.Left - orig.Left) < 1, "latin append position kept");
+}
+{
+    // Replace Arial "Workplace" with new word.
+    PdfElement orig; using (var d = PdfDocument.Load(latin)) orig = Texts(d).First(e => (e.Text ?? "").Contains("Workplace"));
+    string nt = "Newword";
+    byte[] ed; using (var d = PdfDocument.Load(latin)) { d.EditText(0, orig.Index, nt, orig.Text ?? "", orig.FontName, orig.FontSize, orig.IsBold, orig.IsItalic); ed = d.SaveToBytes(); }
+    using var r = PdfDocument.Load(ed);
+    var run = Texts(r).FirstOrDefault(e => e.Text == nt);
+    Check(run != null && NormName(run.FontName).Contains("arial"), $"latin replace matched Arial ({run?.FontName})");
+}
+// Full (non-subset) fonts keep their EXACT face even when new glyphs are added.
+foreach (var bf in new[] { "Times-Bold", "Helvetica", "Courier-Bold" })
+{
+    byte[] doc = MakeLatin(bf, "Word", 60, 100);
+    PdfElement b; using (var d = PdfDocument.Load(doc)) b = Texts(d).First();
+    string nt = "Words!";
+    byte[] ed; using (var d = PdfDocument.Load(doc)) { d.EditText(0, b.Index, nt, "Word", b.FontName, b.FontSize, b.IsBold, b.IsItalic); ed = d.SaveToBytes(); }
+    using var r = PdfDocument.Load(ed); var ts = Texts(r);
+    Check(ts.Count == 1 && ts[0].Text == nt && ts[0].FontName == b.FontName,
+        $"full font '{bf}' append keeps exact font, one element (got {ts.FirstOrDefault()?.FontName})");
 }
 
 // ======================================================================

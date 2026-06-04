@@ -230,10 +230,11 @@ public sealed class EditController
         if (newText == el.Text) return;
         int page = el.PageIndex, idx = el.Index;
         string oldText = el.Text ?? "";
-        string? fn = el.FontName; double sz = el.FontSize; bool bold = el.IsBold;
-        // EditText decides: keep exact font (subset-safe), append-only (keep
-        // original run + add suffix), or rebuild in a family-matched font.
-        _session.Mutate(d => d.EditText(page, idx, newText, oldText, fn, sz, bold));
+        string? fn = el.FontName; double sz = el.FontSize; bool bold = el.IsBold; bool italic = el.IsItalic;
+        // EditText keeps the exact embedded font when the new text needs no
+        // new glyphs; otherwise it rebuilds the run in place (one element)
+        // using the full version of the original typeface.
+        _session.Mutate(d => d.EditText(page, idx, newText, oldText, fn, sz, bold, italic));
     }
 
     public void CommitDelete(ElementAdorner adorner)

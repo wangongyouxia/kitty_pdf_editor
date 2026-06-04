@@ -34,6 +34,27 @@ d.save(os.path.join(OUT, "cjk_subset.pdf"), garbage=4, deflate=True)
 d.close()
 print("wrote cjk_subset.pdf")
 
+# ---- latin_subset.pdf: subset Latin fonts (Times Bold, Arial) ----
+d = fitz.open()
+p = d.new_page(width=480, height=240)
+lat = [
+    (60,  "Anti-productive", "tnrb", WIN + "timesbd.ttf"),   # Times New Roman Bold
+    (110, "Workplace",       "ar",   WIN + "arial.ttf"),      # Arial
+    (160, "Quietness",       "tnr",  WIN + "times.ttf"),      # Times New Roman
+]
+for y, text, alias, fontfile in lat:
+    if os.path.isfile(fontfile):
+        p.insert_text((50, y), text, fontsize=20, fontname=alias, fontfile=fontfile)
+    else:
+        p.insert_text((50, y), text, fontsize=20)
+try:
+    d.subset_fonts()
+except Exception as e:
+    print("subset_fonts failed:", e)
+d.save(os.path.join(OUT, "latin_subset.pdf"), garbage=4, deflate=True)
+d.close()
+print("wrote latin_subset.pdf")
+
 # ---- multi.pdf: 4 pages with distinct identifiable text ----
 d = fitz.open()
 for i in range(4):

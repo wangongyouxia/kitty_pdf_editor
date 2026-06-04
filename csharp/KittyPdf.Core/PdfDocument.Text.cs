@@ -96,6 +96,17 @@ public sealed partial class PdfDocument
         return false;
     }
 
+    // PDF subset fonts are tagged "ABCDEF+RealName" (6 uppercase + '+').
+    // Absence of that tag means a full font that already covers its charset,
+    // so editing can keep it exactly instead of rebuilding.
+    internal static bool IsSubsetFont(string? name)
+    {
+        if (string.IsNullOrEmpty(name) || name.Length < 7 || name[6] != '+') return false;
+        for (int i = 0; i < 6; i++)
+            if (name[i] < 'A' || name[i] > 'Z') return false;
+        return true;
+    }
+
     // Map an original font family (by PSName) to a bundled/system font with
     // FULL coverage, so edited text keeps the original look while rendering
     // newly-typed characters the embedded subset lacks.  `res`/`boldRes`
@@ -145,17 +156,49 @@ public sealed partial class PdfDocument
         return path != null ? GetCidFont(path) : IntPtr.Zero;
     }
 
-    /// <summary>
-    /// Resolve a font handle that fully covers <paramref name="text"/>, trying
-    /// to match the original family from the bundled fonts; CJK falls back
-    /// to bundled YaHei, Latin to base-14 (returns Zero → standard font).
-    /// </summary>
-    private IntPtr ResolveStyledFont(string? familyName, bool bold, string text)
+    // Match a Latin font family name to a Windows system font file (with
+    // bold/italic variant).  Windows always ships these, so an edited Latin
+    // run renders in the SAME-looking typeface (Times stays Times, etc.).
+    internal static string? MatchLatinSystemFile(string norm, bool bold, bool italic)
     {
-        var file = MatchFamilyFile(familyName, bold);
-        if (file != null)
+        if (norm.Length == 0) return null;
+        (string[] keys, string reg, string bd, string it, string bi)[] fams =
         {
-            var h = LoadBundledOrSystem(file);
+            (new[] { "timesnewroman", "times" }, "times.ttf", "timesbd.ttf", "timesi.ttf", "timesbi.ttf"),
+            (new[] { "calibri" }, "calibri.ttf", "calibrib.ttf", "calibrii.ttf", "calibriz.ttf"),
+            (new[] { "cambria" }, "cambria.ttc", "cambriab.ttf", "cambriai.ttf", "cambriaz.ttf"),
+            (new[] { "georgia" }, "georgia.ttf", "georgiab.ttf", "georgiai.ttf", "georgiaz.ttf"),
+            (new[] { "verdana" }, "verdana.ttf", "verdanab.ttf", "verdanai.ttf", "verdanaz.ttf"),
+            (new[] { "tahoma" }, "tahoma.ttf", "tahomabd.ttf", "tahoma.ttf", "tahomabd.ttf"),
+            (new[] { "couriernew", "courier", "consolas", "consol" }, "cour.ttf", "courbd.ttf", "couri.ttf", "courbi.ttf"),
+            (new[] { "arial", "helvetica", "arialmt", "segoeui", "segoe" }, "arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf"),
+        };
+        foreach (var f in fams)
+            if (f.keys.Any(norm.Contains))
+                return bold && italic ? f.bi : bold ? f.bd : italic ? f.it : f.reg;
+
+        bool mono = norm.Contains("mono") || norm.Contains("consol") || norm.Contains("code") || norm.Contains("courier");
+        bool serif = norm.Contains("serif") || norm.Contains("roman") || norm.Contains("garamond")
+                     || norm.Contains("minion") || norm.Contains("georgia") || norm.Contains("cambria");
+        if (mono) return bold && italic ? "courbi.ttf" : bold ? "courbd.ttf" : italic ? "couri.ttf" : "cour.ttf";
+        if (serif) return bold && italic ? "timesbi.ttf" : bold ? "timesbd.ttf" : italic ? "timesi.ttf" : "times.ttf";
+        return bold && italic ? "arialbi.ttf" : bold ? "arialbd.ttf" : italic ? "ariali.ttf" : "arial.ttf";
+    }
+
+    /// <summary>
+    /// Resolve a full font that covers <paramref name="text"/> while matching
+    /// the original typeface as closely as possible:
+    ///   1. named CJK family → bundled (SimSun / FangSong / …);
+    ///   2. any CJK text with no family match → bundled YaHei;
+    ///   3. Latin → the matching Windows system font (Times / Arial / …);
+    ///   4. otherwise base-14 (Zero → caller uses a standard font).
+    /// </summary>
+    private IntPtr ResolveStyledFont(string? familyName, bool bold, bool italic, string text)
+    {
+        var cjkFile = MatchFamilyFile(familyName, bold);
+        if (cjkFile != null)
+        {
+            var h = LoadBundledOrSystem(cjkFile);
             if (h == IntPtr.Zero && bold)
             {
                 var regular = MatchFamilyFile(familyName, false);
@@ -163,16 +206,42 @@ public sealed partial class PdfDocument
             }
             if (h != IntPtr.Zero) return h;
         }
-        return HasNonLatin(text) ? ResolveCjkFont(bold) : IntPtr.Zero;
+        if (HasNonLatin(text)) return ResolveCjkFont(bold);
+
+        string norm = NormalizeFontName(familyName);
+        string? latin = MatchLatinSystemFile(norm, bold, italic);
+        if (latin != null)
+        {
+            string? p = FindSystemFont(latin)
+                     ?? FindSystemFont(MatchLatinSystemFile(norm, bold, false) ?? "")
+                     ?? FindSystemFont(MatchLatinSystemFile(norm, false, false) ?? "");
+            if (p != null)
+            {
+                var h = GetCidFont(p);
+                if (h != IntPtr.Zero) return h;
+            }
+        }
+        return IntPtr.Zero;
+    }
+
+    private static string Base14Alias(string? fontName, bool bold, bool italic)
+    {
+        string norm = NormalizeFontName(fontName);
+        bool mono = norm.Contains("mono") || norm.Contains("courier") || norm.Contains("consol");
+        bool serif = norm.Contains("times") || norm.Contains("serif") || norm.Contains("roman")
+                     || norm.Contains("georgia") || norm.Contains("garamond") || norm.Contains("cambria");
+        if (mono) return bold && italic ? "Courier-BoldOblique" : bold ? "Courier-Bold" : italic ? "Courier-Oblique" : "Courier";
+        if (serif) return bold && italic ? "Times-BoldItalic" : bold ? "Times-Bold" : italic ? "Times-Italic" : "Times-Roman";
+        return bold && italic ? "Helvetica-BoldOblique" : bold ? "Helvetica-Bold" : italic ? "Helvetica-Oblique" : "Helvetica";
     }
 
     private void AddTextObjectAt(IntPtr page, string text, string? fontName,
-        double sizePt, bool bold, uint r, uint g, uint b, uint a, FS_MATRIX matrix)
+        double sizePt, bool bold, bool italic, uint r, uint g, uint b, uint a, FS_MATRIX matrix)
     {
-        IntPtr font = ResolveStyledFont(fontName, bold, text);
+        IntPtr font = ResolveStyledFont(fontName, bold, italic, text);
         IntPtr nobj = font != IntPtr.Zero
             ? Pdfium.FPDFPageObj_CreateTextObj(_doc, font, (float)sizePt)
-            : Pdfium.FPDFPageObj_NewTextObj(_doc, bold ? "Helvetica-Bold" : "Helvetica", (float)sizePt);
+            : Pdfium.FPDFPageObj_NewTextObj(_doc, Base14Alias(fontName, bold, italic), (float)sizePt);
         if (nobj == IntPtr.Zero) return;
         Pdfium.FPDFText_SetText(nobj, text);
         Pdfium.FPDFPageObj_SetFillColor(nobj, r, g, b, a);
@@ -181,24 +250,27 @@ public sealed partial class PdfDocument
     }
 
     /// <summary>
-    /// Edit a text run.  Three strategies, in order of fidelity:
-    ///   1. Every new char was already in the run → keep the EXACT embedded
-    ///      font/weight (FPDFText_SetText on the same object).
-    ///   2. Pure append (new = old + suffix) → leave the original object
-    ///      completely untouched (font + weight perfectly preserved) and add
-    ///      ONLY the suffix as a new run in a family-matched full font.
-    ///   3. Otherwise → rebuild the whole run in a family-matched font,
-    ///      re-applying the original matrix/colour (weight is best-effort).
+    /// Edit a text run IN PLACE (always one element).
+    ///   * If every new char was already in the run → keep the EXACT embedded
+    ///     font (FPDFText_SetText on the same object — perfect fidelity).
+    ///   * Otherwise the embedded subset lacks the new glyph(s), so rebuild
+    ///     the whole run as a SINGLE object using the full version of the
+    ///     original typeface (family + bold/italic matched, Latin or CJK),
+    ///     re-applying the original matrix and colour.
     /// </summary>
     public void EditText(int pageIndex, int objectIndex, string newText, string oldText,
-        string? fontName, double sizePt, bool bold)
+        string? fontName, double sizePt, bool bold, bool italic)
         => WithObject(pageIndex, objectIndex, (page, obj) =>
     {
         if (Pdfium.FPDFPageObj_GetType(obj) != Pdfium.FPDF_PAGEOBJ_TEXT) return;
 
+        // Keep the EXACT embedded font (just re-set the string) when either:
+        //   * every new char was already in the run (subset definitely has it), or
+        //   * the font is NOT a subset ("ABCDEF+" tag absent) → a full font that
+        //     already covers the new glyphs.
         var oldSet = new HashSet<char>(oldText ?? "");
         bool subsetSafe = newText.All(c => oldSet.Contains(c));
-        if (subsetSafe)
+        if (subsetSafe || !IsSubsetFont(fontName))
         {
             Pdfium.FPDFText_SetText(obj, newText);
             Pdfium.FPDFPage_GenerateContent(page);
@@ -206,25 +278,12 @@ public sealed partial class PdfDocument
         }
 
         Pdfium.FPDFPageObj_GetMatrix(obj, out var m);
-        Pdfium.FPDFPageObj_GetBounds(obj, out float l, out float bot, out float right, out float top);
         if (!Pdfium.FPDFPageObj_GetFillColor(obj, out uint r, out uint g, out uint b, out uint a))
         { r = g = b = 0; a = 255; }
 
-        if (!string.IsNullOrEmpty(oldText) && newText.StartsWith(oldText, StringComparison.Ordinal))
-        {
-            // Pure append: keep the original run, add only the suffix at its
-            // right edge on the same baseline — original font/weight intact.
-            string suffix = newText[oldText.Length..];
-            var suffixMatrix = new FS_MATRIX { a = m.a, b = m.b, c = m.c, d = m.d, e = right, f = m.f };
-            AddTextObjectAt(page, suffix, fontName, sizePt, bold, r, g, b, a, suffixMatrix);
-            Pdfium.FPDFPage_GenerateContent(page);
-            return;
-        }
-
-        // Full rebuild in a family-matched font.
         if (Pdfium.FPDFPage_RemoveObject(page, obj))
             Pdfium.FPDFPageObj_Destroy(obj);
-        AddTextObjectAt(page, newText, fontName, sizePt, bold, r, g, b, a, m);
+        AddTextObjectAt(page, newText, fontName, sizePt, bold, italic, r, g, b, a, m);
         Pdfium.FPDFPage_GenerateContent(page);
     });
 
