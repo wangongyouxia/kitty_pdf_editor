@@ -96,16 +96,22 @@ public sealed partial class PdfDocument
         return false;
     }
 
-    // Map an original font family (by PSName) to a system font file that
-    // has FULL coverage, so edited text keeps the original look while
-    // rendering newly-typed characters the embedded subset lacks.
-    private static readonly (string[] keys, string file, string boldFile)[] FamilyMap =
+    // Map an original font family (by PSName) to a bundled/system font with
+    // FULL coverage, so edited text keeps the original look while rendering
+    // newly-typed characters the embedded subset lacks.  `res`/`boldRes`
+    // are embedded-resource font files (preferred); they also double as the
+    // system-font filename to look up if the resource is somehow missing.
+    // ORDER MATTERS: compound names are checked before short ones so a
+    // greedy substring can't mis-match (e.g. "fang*song*" must not hit the
+    // SimSun "song" key; "ya*hei*" must not hit the SimHei "hei" key).
+    // First family whose any key is a substring of the normalised name wins.
+    private static readonly (string[] keys, string res, string boldRes)[] FamilyMap =
     {
-        (new[] { "simsun", "songti", "song", "宋", "mingliu", "newsongti" }, "simsun.ttc", "simsun.ttc"),
-        (new[] { "simhei", "heiti", "黑", "hei" }, "simhei.ttf", "simhei.ttf"),
-        (new[] { "fangsong", "simfang", "仿", "fang" }, "simfang.ttf", "simfang.ttf"),
-        (new[] { "kaiti", "simkai", "楷", "kai" }, "simkai.ttf", "simkai.ttf"),
-        (new[] { "yahei", "雅黑", "msyh", "微软雅黑" }, "msyh.ttc", "msyhbd.ttc"),
+        (new[] { "yahei", "雅黑", "msyh", "微软雅黑", "dengxian", "等线" }, "msyh.ttc", "msyhbd.ttc"),
+        (new[] { "fangsong", "simfang", "仿宋", "仿", "fang", "stfangsong" }, "simfang.ttf", "simfang.ttf"),
+        (new[] { "kaiti", "simkai", "楷体", "楷", "kai", "stkaiti" }, "simkai.ttf", "simkai.ttf"),
+        (new[] { "simhei", "heiti", "黑体", "黑", "hei", "stxihei" }, "simhei.ttf", "simhei.ttf"),
+        (new[] { "simsun", "songti", "宋体", "宋", "song", "stsong", "mingliu", "newsongti" }, "simsun.ttc", "simsun.ttc"),
     };
 
     private static string NormalizeFontName(string? name)
@@ -117,67 +123,95 @@ public sealed partial class PdfDocument
         return n.ToLowerInvariant().Replace(" ", "").Replace("-", "").Replace("_", "");
     }
 
+    private IntPtr LoadBundledOrSystem(string file)
+    {
+        var bytes = LoadEmbeddedFont("KittyPdf.Core.Fonts." + file);
+        if (bytes != null) return GetCidFontFromBytes("res:" + file, bytes);
+        string? path = FindSystemFont(file);
+        return path != null ? GetCidFont(path) : IntPtr.Zero;
+    }
+
     /// <summary>
     /// Resolve a font handle that fully covers <paramref name="text"/>, trying
-    /// to match the original family; CJK falls back to the bundled YaHei,
-    /// Latin to base-14 (returns Zero → caller uses a standard font).
+    /// to match the original family from the bundled fonts; CJK falls back
+    /// to bundled YaHei, Latin to base-14 (returns Zero → standard font).
     /// </summary>
     private IntPtr ResolveStyledFont(string? familyName, bool bold, string text)
     {
         string norm = NormalizeFontName(familyName);
         if (norm.Length > 0)
         {
-            foreach (var (keys, file, boldFile) in FamilyMap)
+            foreach (var (keys, res, boldRes) in FamilyMap)
             {
                 if (!keys.Any(k => norm.Contains(NormalizeFontName(k)))) continue;
-                string? path = FindSystemFont(bold ? boldFile : file) ?? FindSystemFont(file);
-                if (path != null)
-                {
-                    var h = GetCidFont(path);
-                    if (h != IntPtr.Zero) return h;
-                }
+                var h = LoadBundledOrSystem(bold ? boldRes : res);
+                if (h == IntPtr.Zero && bold) h = LoadBundledOrSystem(res);
+                if (h != IntPtr.Zero) return h;
                 break;
             }
         }
         return HasNonLatin(text) ? ResolveCjkFont(bold) : IntPtr.Zero;
     }
 
+    private void AddTextObjectAt(IntPtr page, string text, string? fontName,
+        double sizePt, bool bold, uint r, uint g, uint b, uint a, FS_MATRIX matrix)
+    {
+        IntPtr font = ResolveStyledFont(fontName, bold, text);
+        IntPtr nobj = font != IntPtr.Zero
+            ? Pdfium.FPDFPageObj_CreateTextObj(_doc, font, (float)sizePt)
+            : Pdfium.FPDFPageObj_NewTextObj(_doc, bold ? "Helvetica-Bold" : "Helvetica", (float)sizePt);
+        if (nobj == IntPtr.Zero) return;
+        Pdfium.FPDFText_SetText(nobj, text);
+        Pdfium.FPDFPageObj_SetFillColor(nobj, r, g, b, a);
+        Pdfium.FPDFPageObj_SetMatrix(nobj, matrix);
+        Pdfium.FPDFPage_InsertObject(page, nobj);
+    }
+
     /// <summary>
-    /// Edit a text object's string.  When <paramref name="subsetSafe"/> is
-    /// true (every new char was already in the run) we keep the exact
-    /// embedded font via FPDFText_SetText.  Otherwise we rebuild the run
-    /// with a full family-matched font — same matrix (position/size/skew),
-    /// colour and weight — so newly-typed glyphs render instead of boxes.
+    /// Edit a text run.  Three strategies, in order of fidelity:
+    ///   1. Every new char was already in the run → keep the EXACT embedded
+    ///      font/weight (FPDFText_SetText on the same object).
+    ///   2. Pure append (new = old + suffix) → leave the original object
+    ///      completely untouched (font + weight perfectly preserved) and add
+    ///      ONLY the suffix as a new run in a family-matched full font.
+    ///   3. Otherwise → rebuild the whole run in a family-matched font,
+    ///      re-applying the original matrix/colour (weight is best-effort).
     /// </summary>
-    public void ReplaceText(int pageIndex, int objectIndex, string newText,
-        bool subsetSafe, string? fontName, double sizePt, bool bold)
+    public void EditText(int pageIndex, int objectIndex, string newText, string oldText,
+        string? fontName, double sizePt, bool bold)
         => WithObject(pageIndex, objectIndex, (page, obj) =>
     {
         if (Pdfium.FPDFPageObj_GetType(obj) != Pdfium.FPDF_PAGEOBJ_TEXT) return;
+
+        var oldSet = new HashSet<char>(oldText ?? "");
+        bool subsetSafe = newText.All(c => oldSet.Contains(c));
         if (subsetSafe)
         {
             Pdfium.FPDFText_SetText(obj, newText);
             Pdfium.FPDFPage_GenerateContent(page);
             return;
         }
-        // Capture the original transform + fill colour, then replace.
+
         Pdfium.FPDFPageObj_GetMatrix(obj, out var m);
+        Pdfium.FPDFPageObj_GetBounds(obj, out float l, out float bot, out float right, out float top);
         if (!Pdfium.FPDFPageObj_GetFillColor(obj, out uint r, out uint g, out uint b, out uint a))
         { r = g = b = 0; a = 255; }
+
+        if (!string.IsNullOrEmpty(oldText) && newText.StartsWith(oldText, StringComparison.Ordinal))
+        {
+            // Pure append: keep the original run, add only the suffix at its
+            // right edge on the same baseline — original font/weight intact.
+            string suffix = newText[oldText.Length..];
+            var suffixMatrix = new FS_MATRIX { a = m.a, b = m.b, c = m.c, d = m.d, e = right, f = m.f };
+            AddTextObjectAt(page, suffix, fontName, sizePt, bold, r, g, b, a, suffixMatrix);
+            Pdfium.FPDFPage_GenerateContent(page);
+            return;
+        }
+
+        // Full rebuild in a family-matched font.
         if (Pdfium.FPDFPage_RemoveObject(page, obj))
             Pdfium.FPDFPageObj_Destroy(obj);
-
-        IntPtr font = ResolveStyledFont(fontName, bold, newText);
-        IntPtr nobj = font != IntPtr.Zero
-            ? Pdfium.FPDFPageObj_CreateTextObj(_doc, font, (float)sizePt)
-            : Pdfium.FPDFPageObj_NewTextObj(_doc, bold ? "Helvetica-Bold" : "Helvetica", (float)sizePt);
-        if (nobj != IntPtr.Zero)
-        {
-            Pdfium.FPDFText_SetText(nobj, newText);
-            Pdfium.FPDFPageObj_SetFillColor(nobj, r, g, b, a);
-            Pdfium.FPDFPageObj_SetMatrix(nobj, m);   // exact original placement
-            Pdfium.FPDFPage_InsertObject(page, nobj);
-        }
+        AddTextObjectAt(page, newText, fontName, sizePt, bold, r, g, b, a, m);
         Pdfium.FPDFPage_GenerateContent(page);
     });
 

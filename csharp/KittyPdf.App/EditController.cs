@@ -229,12 +229,11 @@ public sealed class EditController
         var el = adorner.Element;
         if (newText == el.Text) return;
         int page = el.PageIndex, idx = el.Index;
-        // Subset-safe = every new character was already present in the run,
-        // so the embedded subset font definitely covers it → keep exact font.
-        var oldChars = new HashSet<char>(el.Text ?? "");
-        bool subsetSafe = newText.All(c => oldChars.Contains(c));
+        string oldText = el.Text ?? "";
         string? fn = el.FontName; double sz = el.FontSize; bool bold = el.IsBold;
-        _session.Mutate(d => d.ReplaceText(page, idx, newText, subsetSafe, fn, sz, bold));
+        // EditText decides: keep exact font (subset-safe), append-only (keep
+        // original run + add suffix), or rebuild in a family-matched font.
+        _session.Mutate(d => d.EditText(page, idx, newText, oldText, fn, sz, bold));
     }
 
     public void CommitDelete(ElementAdorner adorner)

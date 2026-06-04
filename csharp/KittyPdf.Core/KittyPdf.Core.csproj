@@ -21,6 +21,18 @@
     <EmbeddedResource Include="..\..\app\fonts\msyhbd.ttc">
       <LogicalName>KittyPdf.Core.Fonts.msyhbd.ttc</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="..\..\app\fonts\simsun.ttc">
+      <LogicalName>KittyPdf.Core.Fonts.simsun.ttc</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\app\fonts\simhei.ttf">
+      <LogicalName>KittyPdf.Core.Fonts.simhei.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\app\fonts\simkai.ttf">
+      <LogicalName>KittyPdf.Core.Fonts.simkai.ttf</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\app\fonts\simfang.ttf">
+      <LogicalName>KittyPdf.Core.Fonts.simfang.ttf</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>
