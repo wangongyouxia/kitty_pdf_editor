@@ -306,30 +306,48 @@ public sealed class EditController
     private PdfDocument.Rgba Stroke =>
         new(StrokeColor.R / 255.0, StrokeColor.G / 255.0, StrokeColor.B / 255.0, 1.0);
 
+    // After committing a draw/insert, return to the Select tool so the
+    // just-added element is immediately movable (and we don't keep
+    // stamping more on the next click).  Set BEFORE Mutate so the overlay
+    // rebuild comes up in Select mode.
+    private void ReturnToSelect()
+    {
+        Tool = DrawTool.Select;
+        ToolChanged?.Invoke();
+    }
+
     public void CommitRect(int page, double x, double y, double w, double h)
-        => _session.Mutate(d => d.AddRect(page, x, y, w, h, Stroke, null, StrokeWidth));
+    { ReturnToSelect(); _session.Mutate(d => d.AddRect(page, x, y, w, h, Stroke, null, StrokeWidth)); }
 
     public void CommitEllipse(int page, double cx, double cy, double rx, double ry)
-        => _session.Mutate(d => d.AddEllipse(page, cx, cy, rx, ry, Stroke, null, StrokeWidth));
+    { ReturnToSelect(); _session.Mutate(d => d.AddEllipse(page, cx, cy, rx, ry, Stroke, null, StrokeWidth)); }
 
     public void CommitLine(int page, double x1, double y1, double x2, double y2, bool arrow)
-        => _session.Mutate(d => d.AddLine(page, x1, y1, x2, y2, Stroke, StrokeWidth, arrow));
+    { ReturnToSelect(); _session.Mutate(d => d.AddLine(page, x1, y1, x2, y2, Stroke, StrokeWidth, arrow)); }
 
     public void CommitHighlight(int page, double x, double y, double w, double h)
-        => _session.Mutate(d => d.AddHighlight(page, x, y, w, h,
+    {
+        ReturnToSelect();
+        _session.Mutate(d => d.AddHighlight(page, x, y, w, h,
             (StrokeColor.R / 255.0, StrokeColor.G / 255.0, StrokeColor.B / 255.0)));
+    }
 
     public void CommitInk(int page, IReadOnlyList<IReadOnlyList<(double, double)>> strokes)
-        => _session.Mutate(d => d.AddInk(page, strokes, Stroke, StrokeWidth));
+    { ReturnToSelect(); _session.Mutate(d => d.AddInk(page, strokes, Stroke, StrokeWidth)); }
 
     public void CommitInsertText(int page, double x, double y, string text, double sizePt)
-        => _session.Mutate(d => d.InsertText(page, text, x, y, sizePt,
+    {
+        ReturnToSelect();
+        _session.Mutate(d => d.InsertText(page, text, x, y, sizePt,
             (StrokeColor.R / 255.0, StrokeColor.G / 255.0, StrokeColor.B / 255.0, 1.0)));
+    }
 
     public void CommitInsertImage(int page, double x, double y, double w, double h)
     {
         if (PendingImageBgra == null) return;
         var bytes = PendingImageBgra; int iw = PendingImageW, ih = PendingImageH;
+        PendingImageBgra = null;       // one-shot placement
+        ReturnToSelect();
         _session.Mutate(d => d.InsertImage(page, bytes, iw, ih, x, y, w, h));
     }
 }

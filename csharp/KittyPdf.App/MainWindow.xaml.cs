@@ -101,8 +101,8 @@ public partial class MainWindow : Window
                 System.Windows.Threading.DispatcherPriority.Loaded);
 
             // Auto-enter edit mode (matches the Python build's default).
-            if (_edit == null) _edit = new EditController(this, _session);
-            _edit.Rebuild(_hosts);
+            Edit();
+            _edit!.Rebuild(_hosts);
             if (BtnEdit.IsChecked != true) BtnEdit.IsChecked = true;
             MenuEdit.IsChecked = true;
             _edit.SetActive(true);
@@ -180,7 +180,7 @@ public partial class MainWindow : Window
     private void OnToggleEdit(object sender, RoutedEventArgs e)
     {
         if (!_session.IsOpen) { BtnEdit.IsChecked = false; MenuEdit.IsChecked = false; return; }
-        _edit ??= new EditController(this, _session);
+        Edit();
         _edit.Rebuild(_hosts);
         MenuEdit.IsChecked = BtnEdit.IsChecked == true;
         _edit.SetActive(BtnEdit.IsChecked == true);
@@ -225,10 +225,28 @@ public partial class MainWindow : Window
         StrokeWidthBox.SelectedIndex = 1;
     }
 
+    private EditController Edit()
+    {
+        if (_edit == null)
+        {
+            _edit = new EditController(this, _session);
+            _edit.ToolChanged += OnControllerToolChanged;
+        }
+        return _edit;
+    }
+
+    private void OnControllerToolChanged()
+    {
+        // Keep the toolbar radio in sync when the controller auto-returns
+        // to Select after a draw/insert commit.
+        if (_edit != null && _edit.Tool == DrawTool.Select && ToolSelect.IsChecked != true)
+            ToolSelect.IsChecked = true;
+    }
+
     private void EnsureEditActive()
     {
-        if (_edit == null) _edit = new EditController(this, _session);
-        if (!_edit.IsActive)
+        Edit();
+        if (!_edit!.IsActive)
         {
             _edit.Rebuild(_hosts);
             BtnEdit.IsChecked = true;
@@ -275,12 +293,12 @@ public partial class MainWindow : Window
         if (!RequireOpen()) return;
         var win = new SignatureWindow { Owner = this };
         if (win.ShowDialog() != true || win.ResultBgra == null) return;
-        _edit ??= new EditController(this, _session);
-        _edit.PendingImageBgra = win.ResultBgra;
-        _edit.PendingImageW = win.ResultW;
-        _edit.PendingImageH = win.ResultH;
+        var ctrl = Edit();
+        ctrl.PendingImageBgra = win.ResultBgra;
+        ctrl.PendingImageW = win.ResultW;
+        ctrl.PendingImageH = win.ResultH;
         EnsureEditActive();
-        _edit.SetTool(DrawTool.Image);
+        ctrl.SetTool(DrawTool.Image);
         MessageBox.Show(this, "在页面上点击以放置签名。", "签名");
     }
 
@@ -298,10 +316,10 @@ public partial class MainWindow : Window
             int w = conv.PixelWidth, h = conv.PixelHeight, stride = w * 4;
             var px = new byte[stride * h];
             conv.CopyPixels(px, stride, 0);
-            _edit ??= new EditController(this, _session);
-            _edit.PendingImageBgra = px;
-            _edit.PendingImageW = w;
-            _edit.PendingImageH = h;
+            var ctrl = Edit();
+            ctrl.PendingImageBgra = px;
+            ctrl.PendingImageW = w;
+            ctrl.PendingImageH = h;
             return true;
         }
         catch { return false; }

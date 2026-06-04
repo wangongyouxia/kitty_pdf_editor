@@ -230,6 +230,25 @@ using (var d = PdfDocument.Load(three))
     Check(r.PageCount == 3, "rotate round-trips without page loss");
 }
 
+// ---- Image insert + move. ----
+using (var d = PdfDocument.Load(three))
+{
+    var bgra = new byte[8 * 8 * 4];
+    for (int i = 0; i < bgra.Length; i += 4) { bgra[i] = 0; bgra[i + 1] = 0; bgra[i + 2] = 255; bgra[i + 3] = 255; }
+    d.InsertImage(0, bgra, 8, 8, 50, 50, 40, 40);
+    var imgs = d.GetElements(0).Where(e => e.Kind == PdfElementKind.Image).ToList();
+    Check(imgs.Count >= 1, $"image inserted ({imgs.Count})");
+    if (imgs.Count >= 1)
+    {
+        var img = imgs[0];
+        double oldL = img.Left;
+        d.MoveElement(0, img.Index, 100, 0);
+        var img2 = d.GetElements(0).First(e => e.Kind == PdfElementKind.Image);
+        Check(Math.Abs((img2.Left - oldL) - 100) < 2.0,
+            $"image moves +100 (got {img2.Left - oldL:0.#})");
+    }
+}
+
 // ---- Text extraction + search. ----
 using (var d = PdfDocument.Load(three))
 {
