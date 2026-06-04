@@ -12,4 +12,15 @@
     <PackageReference Include="PdfSharp" Version="6.2.4" />
   </ItemGroup>
 
+  <!-- Bundle CJK fonts so newly-inserted Chinese text (watermark, insert-
+       text) renders on machines without these fonts installed. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\app\fonts\msyh.ttc">
+      <LogicalName>KittyPdf.Core.Fonts.msyh.ttc</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\..\app\fonts\msyhbd.ttc">
+      <LogicalName>KittyPdf.Core.Fonts.msyhbd.ttc</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>

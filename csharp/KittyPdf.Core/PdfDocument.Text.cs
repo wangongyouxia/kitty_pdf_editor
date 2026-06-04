@@ -41,21 +41,53 @@ public sealed partial class PdfDocument
         return null;
     }
 
-    private unsafe IntPtr GetCidFont(string path)
+    private unsafe IntPtr GetCidFontFromBytes(string key, byte[] data)
     {
-        if (_fontCache.TryGetValue(path, out var cached)) return cached;
+        if (_fontCache.TryGetValue(key, out var cached)) return cached;
         IntPtr handle = IntPtr.Zero;
         try
         {
-            byte[] data = File.ReadAllBytes(path);
             fixed (byte* p = data)
             {
                 handle = Pdfium.FPDFText_LoadFont(_doc, p, (uint)data.Length, 2, true);
             }
         }
         catch { handle = IntPtr.Zero; }
-        _fontCache[path] = handle;
+        _fontCache[key] = handle;
         return handle;
+    }
+
+    private IntPtr GetCidFont(string path)
+    {
+        try { return GetCidFontFromBytes(path, File.ReadAllBytes(path)); }
+        catch { return IntPtr.Zero; }
+    }
+
+    // Embedded-font cache shared across documents (the bytes are immutable).
+    private static readonly Dictionary<string, byte[]?> _embeddedFonts = new();
+
+    private static byte[]? LoadEmbeddedFont(string logicalName)
+    {
+        if (_embeddedFonts.TryGetValue(logicalName, out var c)) return c;
+        byte[]? data = null;
+        try
+        {
+            using var s = typeof(PdfDocument).Assembly.GetManifestResourceStream(logicalName);
+            if (s != null) { using var ms = new MemoryStream(); s.CopyTo(ms); data = ms.ToArray(); }
+        }
+        catch { data = null; }
+        _embeddedFonts[logicalName] = data;
+        return data;
+    }
+
+    /// <summary>Resolve a CJK font handle: bundled (embedded) first, else system.</summary>
+    private IntPtr ResolveCjkFont(bool bold)
+    {
+        string res = bold ? "KittyPdf.Core.Fonts.msyhbd.ttc" : "KittyPdf.Core.Fonts.msyh.ttc";
+        var bytes = LoadEmbeddedFont(res);
+        if (bytes != null) return GetCidFontFromBytes(res, bytes);
+        string? fp = FindCjkFontPath(bold);
+        return fp != null ? GetCidFont(fp) : IntPtr.Zero;
     }
 
     private static bool HasNonLatin(string text)
@@ -81,8 +113,7 @@ public sealed partial class PdfDocument
             IntPtr obj;
             if (HasNonLatin(text))
             {
-                string? fp = FindCjkFontPath(bold);
-                IntPtr font = fp != null ? GetCidFont(fp) : IntPtr.Zero;
+                IntPtr font = ResolveCjkFont(bold);
                 obj = font != IntPtr.Zero
                     ? Pdfium.FPDFPageObj_CreateTextObj(_doc, font, (float)sizePt)
                     : Pdfium.FPDFPageObj_NewTextObj(_doc, "Helvetica", (float)sizePt);
