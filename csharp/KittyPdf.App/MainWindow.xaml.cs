@@ -318,6 +318,15 @@ public partial class MainWindow : Window
         OnToggleEdit(sender, e);
     }
 
+    private bool _english;
+    private void OnToggleLanguage(object sender, RoutedEventArgs e)
+    {
+        _english = !_english;
+        Localizer.Apply(this, _english);
+    }
+
+    public void SetEnglishForShot() { _english = true; Localizer.Apply(this, true); }
+
     private void OnAbout(object sender, RoutedEventArgs e) =>
         MessageBox.Show(this,
             "Kitty PDF Editor\n\n基于 PDFium 的元素级 PDF 编辑器。\n" +

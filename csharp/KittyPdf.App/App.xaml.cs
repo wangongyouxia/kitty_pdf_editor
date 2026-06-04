@@ -49,6 +49,7 @@ public partial class App : Application
                 timer.Stop();
                 try
                 {
+                    if (e.Args.Length >= 4 && e.Args[3] == "en") w.SetEnglishForShot();
                     w.SelectFirstForShot();
                     w.UpdateLayout();
                     int pw = (int)w.ActualWidth, ph = (int)w.ActualHeight;

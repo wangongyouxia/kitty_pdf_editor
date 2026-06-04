@@ -49,6 +49,8 @@
                 <MenuItem Header="导出每页图片…" Click="OnExportImages"/>
             </MenuItem>
             <MenuItem Header="帮助(_H)">
+                <MenuItem Header="English" Click="OnToggleLanguage"/>
+                <Separator/>
                 <MenuItem Header="关于" Click="OnAbout"/>
                 <MenuItem Header="赞赏支持" Click="OnDonate"/>
             </MenuItem>
