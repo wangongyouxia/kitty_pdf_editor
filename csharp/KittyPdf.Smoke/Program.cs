@@ -50,6 +50,23 @@ if (args.Length >= 1 && File.Exists(args[0]))
         return 0;
     }
 
+    // `<pdf> edit <index> <newText>` — replace a text run (subset-aware)
+    // and write <pdf>.edit.pdf, mirroring the editor's CommitText logic.
+    if (args.Length >= 4 && args[1] == "edit")
+    {
+        int idx = int.Parse(args[2]);
+        using var doc = PdfDocument.Open(args[0]);
+        var target = doc.GetElements(0).First(e => e.Index == idx && e.Kind == PdfElementKind.Text);
+        string newText = (target.Text ?? "") + args[3];   // append suffix (ASCII-safe on CLI)
+        var oldChars = new HashSet<char>(target.Text ?? "");
+        bool subsetSafe = newText.All(c => oldChars.Contains(c));
+        Console.WriteLine($"old='{target.Text}' font={target.FontName} subsetSafe={subsetSafe}");
+        doc.ReplaceText(0, idx, newText, subsetSafe, target.FontName, target.FontSize, target.IsBold);
+        doc.SaveToFile(args[0] + ".edit.pdf");
+        Console.WriteLine("wrote " + args[0] + ".edit.pdf");
+        return 0;
+    }
+
     // `<pdf> draw` — stamp shapes on page 0 and write <pdf>.draw.pdf.
     if (args.Length >= 2 && args[1] == "draw")
     {

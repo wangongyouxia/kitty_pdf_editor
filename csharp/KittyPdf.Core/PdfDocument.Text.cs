@@ -96,6 +96,91 @@ public sealed partial class PdfDocument
         return false;
     }
 
+    // Map an original font family (by PSName) to a system font file that
+    // has FULL coverage, so edited text keeps the original look while
+    // rendering newly-typed characters the embedded subset lacks.
+    private static readonly (string[] keys, string file, string boldFile)[] FamilyMap =
+    {
+        (new[] { "simsun", "songti", "song", "宋", "mingliu", "newsongti" }, "simsun.ttc", "simsun.ttc"),
+        (new[] { "simhei", "heiti", "黑", "hei" }, "simhei.ttf", "simhei.ttf"),
+        (new[] { "fangsong", "simfang", "仿", "fang" }, "simfang.ttf", "simfang.ttf"),
+        (new[] { "kaiti", "simkai", "楷", "kai" }, "simkai.ttf", "simkai.ttf"),
+        (new[] { "yahei", "雅黑", "msyh", "微软雅黑" }, "msyh.ttc", "msyhbd.ttc"),
+    };
+
+    private static string NormalizeFontName(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return "";
+        string n = name;
+        int plus = n.IndexOf('+');
+        if (plus is >= 1 and <= 7) n = n[(plus + 1)..];   // strip "ABCDEF+" subset prefix
+        return n.ToLowerInvariant().Replace(" ", "").Replace("-", "").Replace("_", "");
+    }
+
+    /// <summary>
+    /// Resolve a font handle that fully covers <paramref name="text"/>, trying
+    /// to match the original family; CJK falls back to the bundled YaHei,
+    /// Latin to base-14 (returns Zero → caller uses a standard font).
+    /// </summary>
+    private IntPtr ResolveStyledFont(string? familyName, bool bold, string text)
+    {
+        string norm = NormalizeFontName(familyName);
+        if (norm.Length > 0)
+        {
+            foreach (var (keys, file, boldFile) in FamilyMap)
+            {
+                if (!keys.Any(k => norm.Contains(NormalizeFontName(k)))) continue;
+                string? path = FindSystemFont(bold ? boldFile : file) ?? FindSystemFont(file);
+                if (path != null)
+                {
+                    var h = GetCidFont(path);
+                    if (h != IntPtr.Zero) return h;
+                }
+                break;
+            }
+        }
+        return HasNonLatin(text) ? ResolveCjkFont(bold) : IntPtr.Zero;
+    }
+
+    /// <summary>
+    /// Edit a text object's string.  When <paramref name="subsetSafe"/> is
+    /// true (every new char was already in the run) we keep the exact
+    /// embedded font via FPDFText_SetText.  Otherwise we rebuild the run
+    /// with a full family-matched font — same matrix (position/size/skew),
+    /// colour and weight — so newly-typed glyphs render instead of boxes.
+    /// </summary>
+    public void ReplaceText(int pageIndex, int objectIndex, string newText,
+        bool subsetSafe, string? fontName, double sizePt, bool bold)
+        => WithObject(pageIndex, objectIndex, (page, obj) =>
+    {
+        if (Pdfium.FPDFPageObj_GetType(obj) != Pdfium.FPDF_PAGEOBJ_TEXT) return;
+        if (subsetSafe)
+        {
+            Pdfium.FPDFText_SetText(obj, newText);
+            Pdfium.FPDFPage_GenerateContent(page);
+            return;
+        }
+        // Capture the original transform + fill colour, then replace.
+        Pdfium.FPDFPageObj_GetMatrix(obj, out var m);
+        if (!Pdfium.FPDFPageObj_GetFillColor(obj, out uint r, out uint g, out uint b, out uint a))
+        { r = g = b = 0; a = 255; }
+        if (Pdfium.FPDFPage_RemoveObject(page, obj))
+            Pdfium.FPDFPageObj_Destroy(obj);
+
+        IntPtr font = ResolveStyledFont(fontName, bold, newText);
+        IntPtr nobj = font != IntPtr.Zero
+            ? Pdfium.FPDFPageObj_CreateTextObj(_doc, font, (float)sizePt)
+            : Pdfium.FPDFPageObj_NewTextObj(_doc, bold ? "Helvetica-Bold" : "Helvetica", (float)sizePt);
+        if (nobj != IntPtr.Zero)
+        {
+            Pdfium.FPDFText_SetText(nobj, newText);
+            Pdfium.FPDFPageObj_SetFillColor(nobj, r, g, b, a);
+            Pdfium.FPDFPageObj_SetMatrix(nobj, m);   // exact original placement
+            Pdfium.FPDFPage_InsertObject(page, nobj);
+        }
+        Pdfium.FPDFPage_GenerateContent(page);
+    });
+
     /// <summary>
     /// Insert a text run at PDF baseline (x,y) (y-up), optionally rotated.
     /// Uses a CJK CID font when the text needs one; otherwise a base-14
