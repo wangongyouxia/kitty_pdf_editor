@@ -20,12 +20,42 @@ Pdfium.FPDF_InitLibrary();
 // we can verify font/weight/bold on real-world documents.
 if (args.Length >= 1 && File.Exists(args[0]))
 {
-    using var doc = PdfDocument.Open(args[0]);
-    Console.WriteLine($"pages={doc.PageCount}  file={args[0]}");
-    for (int p = 0; p < doc.PageCount; p++)
+    // `<pdf> move <index> <dx> <dy>` — move an element and report the
+    // element's font + position before and after a save/reload, proving
+    // a real-document edit preserves the font identity.
+    if (args.Length >= 5 && args[1] == "move")
+    {
+        int idx = int.Parse(args[2]);
+        double dx = double.Parse(args[3]), dy = double.Parse(args[4]);
+        byte[] movedBytes;
+        string beforeFont;
+        using (var doc = PdfDocument.Open(args[0]))
+        {
+            var before = doc.GetElements(0).First(e => e.Index == idx);
+            beforeFont = before.FontName ?? "";
+            Console.WriteLine("BEFORE: " + before);
+            doc.MoveElement(0, idx, dx, dy);
+            movedBytes = doc.SaveToBytes();
+        }
+        using (var doc = PdfDocument.Load(movedBytes))
+        {
+            var after = doc.GetElements(0).First(e =>
+                e.Kind == PdfElementKind.Text && (e.FontName ?? "") == beforeFont);
+            Console.WriteLine("AFTER : " + after);
+            Console.WriteLine(after.FontName == beforeFont
+                ? "[ OK ] font preserved across real-doc move"
+                : "[FAIL] font changed!");
+            doc.SaveToFile(args[0] + ".moved.pdf");
+        }
+        return 0;
+    }
+
+    using var d2 = PdfDocument.Open(args[0]);
+    Console.WriteLine($"pages={d2.PageCount}  file={args[0]}");
+    for (int p = 0; p < d2.PageCount; p++)
     {
         Console.WriteLine($"--- page {p} ---");
-        foreach (var el in doc.GetElements(p))
+        foreach (var el in d2.GetElements(p))
             Console.WriteLine("  " + el);
     }
     return 0;
