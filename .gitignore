@@ -13,6 +13,11 @@ csharp/**/bin/
 csharp/**/obj/
 *.user
 
+# Generated test artifacts
+csharp/*.png
+csharp/sample_*.pdf
+csharp/out_*.pdf
+
 # Editor / OS junk
 .vscode/
 .idea/

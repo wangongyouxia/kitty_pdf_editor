@@ -1,0 +1,46 @@
+<Window x:Class="KittyPdf.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Kitty PDF Editor" Height="820" Width="1180"
+        WindowStartupLocation="CenterScreen"
+        Background="#F3F3F3">
+    <DockPanel>
+        <ToolBarTray DockPanel.Dock="Top" Background="#FFFFFF">
+            <ToolBar Band="0" ClipToBounds="False">
+                <Button x:Name="BtnOpen" Content="打开" Click="OnOpen" Padding="10,4" Margin="2,0"/>
+                <Button x:Name="BtnSave" Content="保存" Click="OnSave" Padding="10,4" Margin="2,0"/>
+                <Button x:Name="BtnSaveAs" Content="另存为" Click="OnSaveAs" Padding="10,4" Margin="2,0"/>
+                <Separator/>
+                <Button x:Name="BtnUndo" Content="撤销" Click="OnUndo" Padding="10,4" Margin="2,0"/>
+                <Button x:Name="BtnRedo" Content="重做" Click="OnRedo" Padding="10,4" Margin="2,0"/>
+                <Separator/>
+                <ToggleButton x:Name="BtnEdit" Content="✏ 编辑内容" Click="OnToggleEdit"
+                              Padding="12,4" Margin="2,0" FontWeight="Bold"/>
+                <Separator/>
+                <Button Content="–" Click="OnZoomOut" Padding="10,4" Margin="2,0" FontWeight="Bold"/>
+                <TextBlock x:Name="ZoomLabel" Text="100%" VerticalAlignment="Center"
+                           Width="48" TextAlignment="Center"/>
+                <Button Content="+" Click="OnZoomIn" Padding="10,4" Margin="2,0" FontWeight="Bold"/>
+                <Button Content="适合宽度" Click="OnFitWidth" Padding="10,4" Margin="2,0"/>
+            </ToolBar>
+        </ToolBarTray>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <ScrollViewer x:Name="Scroller" Grid.Column="0"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto"
+                          ScrollChanged="OnScrollChanged"
+                          Padding="24">
+                <StackPanel x:Name="PagesPanel" Orientation="Vertical"
+                            HorizontalAlignment="Center"/>
+            </ScrollViewer>
+
+            <ContentControl x:Name="InspectorHost" Grid.Column="1"/>
+        </Grid>
+    </DockPanel>
+</Window>

@@ -16,6 +16,21 @@ void Check(bool cond, string msg)
 
 Pdfium.FPDF_InitLibrary();
 
+// Inspection mode: `KittyPdf.Smoke <file.pdf>` prints every element so
+// we can verify font/weight/bold on real-world documents.
+if (args.Length >= 1 && File.Exists(args[0]))
+{
+    using var doc = PdfDocument.Open(args[0]);
+    Console.WriteLine($"pages={doc.PageCount}  file={args[0]}");
+    for (int p = 0; p < doc.PageCount; p++)
+    {
+        Console.WriteLine($"--- page {p} ---");
+        foreach (var el in doc.GetElements(p))
+            Console.WriteLine("  " + el);
+    }
+    return 0;
+}
+
 Console.WriteLine("=== KittyPdf.Core engine smoke ===");
 
 byte[] original = MakeDoc("Helvetica-Bold", "BoldText", 50, 100);
