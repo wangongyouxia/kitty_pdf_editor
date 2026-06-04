@@ -114,13 +114,27 @@ public sealed partial class PdfDocument
         (new[] { "simsun", "songti", "宋体", "宋", "song", "stsong", "mingliu", "newsongti" }, "simsun.ttc", "simsun.ttc"),
     };
 
-    private static string NormalizeFontName(string? name)
+    internal static string NormalizeFontName(string? name)
     {
         if (string.IsNullOrEmpty(name)) return "";
         string n = name;
         int plus = n.IndexOf('+');
         if (plus is >= 1 and <= 7) n = n[(plus + 1)..];   // strip "ABCDEF+" subset prefix
         return n.ToLowerInvariant().Replace(" ", "").Replace("-", "").Replace("_", "");
+    }
+
+    /// <summary>
+    /// Family-match a PSName to a bundled font filename (or null for no
+    /// match → caller falls back to YaHei/base-14).  Pure + testable.
+    /// </summary>
+    internal static string? MatchFamilyFile(string? familyName, bool bold)
+    {
+        string norm = NormalizeFontName(familyName);
+        if (norm.Length == 0) return null;
+        foreach (var (keys, res, boldRes) in FamilyMap)
+            if (keys.Any(k => norm.Contains(NormalizeFontName(k))))
+                return bold ? boldRes : res;
+        return null;
     }
 
     private IntPtr LoadBundledOrSystem(string file)
@@ -138,17 +152,16 @@ public sealed partial class PdfDocument
     /// </summary>
     private IntPtr ResolveStyledFont(string? familyName, bool bold, string text)
     {
-        string norm = NormalizeFontName(familyName);
-        if (norm.Length > 0)
+        var file = MatchFamilyFile(familyName, bold);
+        if (file != null)
         {
-            foreach (var (keys, res, boldRes) in FamilyMap)
+            var h = LoadBundledOrSystem(file);
+            if (h == IntPtr.Zero && bold)
             {
-                if (!keys.Any(k => norm.Contains(NormalizeFontName(k)))) continue;
-                var h = LoadBundledOrSystem(bold ? boldRes : res);
-                if (h == IntPtr.Zero && bold) h = LoadBundledOrSystem(res);
-                if (h != IntPtr.Zero) return h;
-                break;
+                var regular = MatchFamilyFile(familyName, false);
+                if (regular != null) h = LoadBundledOrSystem(regular);
             }
+            if (h != IntPtr.Zero) return h;
         }
         return HasNonLatin(text) ? ResolveCjkFont(bold) : IntPtr.Zero;
     }

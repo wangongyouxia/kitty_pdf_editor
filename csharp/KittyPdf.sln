@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KittyPdf.Smoke", "KittyPdf.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KittyPdf.App", "KittyPdf.App\KittyPdf.App.csproj", "{B38BC3D1-69F0-4441-81A8-8266EC9AFFEC}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "KittyPdf.Tests", "KittyPdf.Tests\KittyPdf.Tests.csproj", "{5007E2A1-ECE5-48DC-83EA-1B7CAD3E8616}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -30,5 +32,9 @@ Global
 		{B38BC3D1-69F0-4441-81A8-8266EC9AFFEC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B38BC3D1-69F0-4441-81A8-8266EC9AFFEC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B38BC3D1-69F0-4441-81A8-8266EC9AFFEC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5007E2A1-ECE5-48DC-83EA-1B7CAD3E8616}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5007E2A1-ECE5-48DC-83EA-1B7CAD3E8616}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5007E2A1-ECE5-48DC-83EA-1B7CAD3E8616}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5007E2A1-ECE5-48DC-83EA-1B7CAD3E8616}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

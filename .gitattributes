@@ -1,0 +1,11 @@
+# Treat binary assets as binary — never apply line-ending conversion,
+# which would corrupt PDFs / fonts / images.
+*.pdf  binary
+*.ttc  binary
+*.ttf  binary
+*.otf  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.exe  binary
