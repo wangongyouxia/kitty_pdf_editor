@@ -109,7 +109,7 @@ foreach (var (font, old, neu) in subsetCases)
 }
 
 // ======================================================================
-Section("D. Text APPEND on CJK subset: ONE element, family-matched font, pos kept");
+Section("D. Text APPEND on CJK subset: original run UNTOUCHED + suffix supplement");
 var cjk = FixBytes("cjk_subset.pdf");
 var cjkRuns = new (string token, string famToken, string expectFont)[]
 {
@@ -127,13 +127,13 @@ foreach (var (token, famToken, expectFont) in cjkRuns)
     using (var d = PdfDocument.Load(cjk)) { d.EditText(0, orig.Index, newText, orig.Text ?? "", orig.FontName, orig.FontSize, orig.IsBold, orig.IsItalic); ed = d.SaveToBytes(); }
     using var r = PdfDocument.Load(ed);
     var ts = Texts(r);
-    var run = ts.FirstOrDefault(e => e.Text == newText);
-    Check(ts.Count == beforeCount, $"append[{famToken}] stays ONE element (count {ts.Count} == {beforeCount})");
-    Check(run != null, $"append[{famToken}] run holds full new text '{newText}'");
-    Check(run != null && Math.Abs(run.Left - orig.Left) < 1 && Math.Abs(run.Bottom - orig.Bottom) < 2,
-        $"append[{famToken}] position kept");
-    Check(run != null && NormName(run.FontName).Contains(expectFont),
-        $"append[{famToken}] font family matched ({run?.FontName})");
+    var keep = ts.FirstOrDefault(e => e.Text == orig.Text);
+    var suffix = ts.FirstOrDefault(e => e.Text == "X");
+    Check(ts.Count == beforeCount + 1, $"append[{famToken}] supplements (+1 run: {ts.Count} vs {beforeCount})");
+    Check(keep != null && keep.FontName == orig.FontName && Math.Abs(keep.Left - orig.Left) < 1 && Math.Abs(keep.Bottom - orig.Bottom) < 1,
+        $"append[{famToken}] ORIGINAL run untouched (exact font + weight + pos)");
+    Check(suffix != null && NormName(suffix.FontName).Contains(expectFont),
+        $"append[{famToken}] suffix family-matched ({suffix?.FontName})");
 }
 
 // ======================================================================
@@ -377,15 +377,14 @@ var latin = FixBytes("latin_subset.pdf");
     string nt = (orig.Text ?? "") + "s";
     byte[] ed; using (var d = PdfDocument.Load(latin)) { d.EditText(0, orig.Index, nt, orig.Text ?? "", orig.FontName, orig.FontSize, orig.IsBold, orig.IsItalic); ed = d.SaveToBytes(); }
     using var r = PdfDocument.Load(ed); var ts = Texts(r);
-    // (the fixture's hyphen is U+00AD; the rebuild normalises it, so match
-    // on the stable substring rather than the exact string)
-    var run = ts.FirstOrDefault(e => (e.Text ?? "").Contains("Anti"));
-    Check(ts.Count == before, $"latin append 's' stays ONE element ({ts.Count}=={before})");
-    Check(run != null && run.Text!.Contains("productive") && run.Text!.EndsWith("s"),
-        $"latin append run holds full text ({run?.Text})");
-    Check(run != null && NormName(run.FontName).Contains("times"), $"latin append matched Times ({run?.FontName})");
-    Check(run != null && run.IsBold, $"latin append kept BOLD ({run?.FontName})");
-    Check(run != null && Math.Abs(run.Left - orig.Left) < 1, "latin append position kept");
+    // The fixture's "Anti-productive" uses a SUBSET Times-Bold, so the
+    // appended "s" is supplemented: original run untouched + "s" in Times.
+    var keep = ts.FirstOrDefault(e => (e.Text ?? "").Contains("Anti"));
+    var suffix = ts.FirstOrDefault(e => e.Text == "s");
+    Check(ts.Count == before + 1, $"latin subset append supplements (+1: {ts.Count} vs {before})");
+    Check(keep != null && keep.FontName == orig.FontName, "latin append ORIGINAL run untouched (exact font)");
+    Check(suffix != null && NormName(suffix.FontName).Contains("times"), $"latin append suffix matched Times ({suffix?.FontName})");
+    Check(suffix != null && suffix.IsBold, $"latin append suffix kept BOLD ({suffix?.FontName})");
 }
 {
     // Replace Arial "Workplace" with new word.

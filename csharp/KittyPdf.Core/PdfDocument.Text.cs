@@ -250,13 +250,19 @@ public sealed partial class PdfDocument
     }
 
     /// <summary>
-    /// Edit a text run IN PLACE (always one element).
-    ///   * If every new char was already in the run → keep the EXACT embedded
-    ///     font (FPDFText_SetText on the same object — perfect fidelity).
-    ///   * Otherwise the embedded subset lacks the new glyph(s), so rebuild
-    ///     the whole run as a SINGLE object using the full version of the
-    ///     original typeface (family + bold/italic matched, Latin or CJK),
-    ///     re-applying the original matrix and colour.
+    /// Edit a text run, preserving the original font as much as physically
+    /// possible:
+    ///   1. New text needs no new glyph (all chars already in the run) OR the
+    ///      font is NOT a subset (full font, covers everything) → keep the
+    ///      EXACT embedded font via FPDFText_SetText.  One element, perfect.
+    ///   2. Subset font + pure append → leave the original run COMPLETELY
+    ///      untouched (its exact font + weight preserved) and add only the
+    ///      appended characters as a small supplement run in the closest
+    ///      family-matched full font.  (The embedded subset physically lacks
+    ///      the new glyphs, and no thinner match may exist, so only the new
+    ///      characters can differ — the original text never changes.)
+    ///   3. Subset font + non-append edit → rebuild the whole run in a
+    ///      family-matched font (best effort).
     /// </summary>
     public void EditText(int pageIndex, int objectIndex, string newText, string oldText,
         string? fontName, double sizePt, bool bold, bool italic)
@@ -264,10 +270,6 @@ public sealed partial class PdfDocument
     {
         if (Pdfium.FPDFPageObj_GetType(obj) != Pdfium.FPDF_PAGEOBJ_TEXT) return;
 
-        // Keep the EXACT embedded font (just re-set the string) when either:
-        //   * every new char was already in the run (subset definitely has it), or
-        //   * the font is NOT a subset ("ABCDEF+" tag absent) → a full font that
-        //     already covers the new glyphs.
         var oldSet = new HashSet<char>(oldText ?? "");
         bool subsetSafe = newText.All(c => oldSet.Contains(c));
         if (subsetSafe || !IsSubsetFont(fontName))
@@ -278,9 +280,21 @@ public sealed partial class PdfDocument
         }
 
         Pdfium.FPDFPageObj_GetMatrix(obj, out var m);
+        Pdfium.FPDFPageObj_GetBounds(obj, out float _, out float _, out float right, out float _);
         if (!Pdfium.FPDFPageObj_GetFillColor(obj, out uint r, out uint g, out uint b, out uint a))
         { r = g = b = 0; a = 255; }
 
+        if (!string.IsNullOrEmpty(oldText) && newText.StartsWith(oldText, StringComparison.Ordinal))
+        {
+            // Preserve the original run exactly; supplement only the new tail.
+            string suffix = newText[oldText.Length..];
+            var suffixMatrix = new FS_MATRIX { a = m.a, b = m.b, c = m.c, d = m.d, e = right, f = m.f };
+            AddTextObjectAt(page, suffix, fontName, sizePt, bold, italic, r, g, b, a, suffixMatrix);
+            Pdfium.FPDFPage_GenerateContent(page);
+            return;
+        }
+
+        // Non-append change to a subset run: rebuild the whole run.
         if (Pdfium.FPDFPage_RemoveObject(page, obj))
             Pdfium.FPDFPageObj_Destroy(obj);
         AddTextObjectAt(page, newText, fontName, sizePt, bold, italic, r, g, b, a, m);
