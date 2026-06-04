@@ -217,11 +217,26 @@ public sealed partial class PdfDocument : IDisposable
             if (len == 0) return null;
             var fb = new byte[len];
             fixed (byte* p = fb) Pdfium.FPDFFont_GetFamilyName(font, p, len);
-            return Encoding.ASCII.GetString(fb, 0, (int)len).TrimEnd('\0');
+            return DecodeFontName(fb, (int)len);
         }
         var buf = new byte[len];
         fixed (byte* p = buf) Pdfium.FPDFFont_GetBaseFontName(font, p, len);
-        return Encoding.ASCII.GetString(buf, 0, (int)len).TrimEnd('\0');
+        return DecodeFontName(buf, (int)len);
+    }
+
+    /// <summary>
+    /// PDF /BaseFont names with CJK characters are commonly stored as UTF-8
+    /// bytes (e.g. "ABCDEE+宋体"); decoding them as ASCII turned the Chinese
+    /// into "??????".  Decode as UTF-8, falling back to Latin-1 for names
+    /// that aren't valid UTF-8.
+    /// </summary>
+    private static string DecodeFontName(byte[] buf, int len)
+    {
+        int n = len;
+        while (n > 0 && buf[n - 1] == 0) n--;   // strip trailing NUL(s)
+        if (n == 0) return "";
+        try { return new UTF8Encoding(false, true).GetString(buf, 0, n); }
+        catch { return Encoding.Latin1.GetString(buf, 0, n); }
     }
 
     // ------------------------------------------------------------------
