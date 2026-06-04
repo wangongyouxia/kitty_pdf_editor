@@ -11,7 +11,7 @@ namespace KittyPdf.Core;
 /// Threading: not thread-safe; drive from one thread (the UI thread is
 /// fine — rendering a page is fast).
 /// </summary>
-public sealed class PdfDocument : IDisposable
+public sealed partial class PdfDocument : IDisposable
 {
     private static bool _libReady;
     private static readonly object _libLock = new();
@@ -225,6 +225,100 @@ public sealed class PdfDocument : IDisposable
     }
 
     // ------------------------------------------------------------------
+    // Text extraction + search
+    // ------------------------------------------------------------------
+    public unsafe string GetPageText(int pageIndex)
+    {
+        var page = Pdfium.FPDF_LoadPage(_doc, pageIndex);
+        if (page == IntPtr.Zero) return "";
+        IntPtr tp = Pdfium.FPDFText_LoadPage(page);
+        try
+        {
+            if (tp == IntPtr.Zero) return "";
+            int n = Pdfium.FPDFText_CountChars(tp);
+            if (n <= 0) return "";
+            var buf = new ushort[n + 1];
+            fixed (ushort* p = buf)
+            {
+                int got = Pdfium.FPDFText_GetText(tp, 0, n, p);
+                if (got <= 0) return "";
+                return new string((char*)p, 0, Math.Max(0, got - 1)); // drop NUL
+            }
+        }
+        finally
+        {
+            if (tp != IntPtr.Zero) Pdfium.FPDFText_ClosePage(tp);
+            Pdfium.FPDF_ClosePage(page);
+        }
+    }
+
+    public string GetAllText()
+    {
+        var sb = new StringBuilder();
+        for (int p = 0; p < PageCount; p++)
+        {
+            sb.Append(GetPageText(p));
+            sb.Append("\n\n");
+        }
+        return sb.ToString();
+    }
+
+    public sealed record SearchHit(int Page, int CharIndex, string Snippet);
+
+    /// <summary>Case-insensitive search across all pages.</summary>
+    public List<SearchHit> Search(string query)
+    {
+        var hits = new List<SearchHit>();
+        if (string.IsNullOrEmpty(query)) return hits;
+        for (int p = 0; p < PageCount; p++)
+        {
+            var page = Pdfium.FPDF_LoadPage(_doc, p);
+            if (page == IntPtr.Zero) continue;
+            IntPtr tp = Pdfium.FPDFText_LoadPage(page);
+            try
+            {
+                if (tp == IntPtr.Zero) continue;
+                string pageText = GetPageTextFromHandle(tp);
+                IntPtr h = Pdfium.FPDFText_FindStart(tp, query, 0, 0);
+                if (h == IntPtr.Zero) continue;
+                try
+                {
+                    while (Pdfium.FPDFText_FindNext(h))
+                    {
+                        int idx = Pdfium.FPDFText_GetSchResultIndex(h);
+                        int start = Math.Max(0, idx - 24);
+                        int end = Math.Min(pageText.Length, idx + query.Length + 24);
+                        string snippet = start < end
+                            ? pageText[start..end].Replace("\n", " ").Replace("\r", " ")
+                            : query;
+                        hits.Add(new SearchHit(p, idx, snippet));
+                    }
+                }
+                finally { Pdfium.FPDFText_FindClose(h); }
+            }
+            finally
+            {
+                if (tp != IntPtr.Zero) Pdfium.FPDFText_ClosePage(tp);
+                Pdfium.FPDF_ClosePage(page);
+            }
+        }
+        return hits;
+    }
+
+    private static unsafe string GetPageTextFromHandle(IntPtr tp)
+    {
+        int n = Pdfium.FPDFText_CountChars(tp);
+        if (n <= 0) return "";
+        var buf = new ushort[n + 1];
+        fixed (ushort* p = buf)
+        {
+            int got = Pdfium.FPDFText_GetText(tp, 0, n, p);
+            if (got <= 0) return "";
+            return new string((char*)p, 0, Math.Max(0, got - 1));
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Element edits.  Each takes the element's Index, re-finds the live
     // object, mutates it, and regenerates the page content stream.
     // The font resource is never re-selected, so style is preserved.
@@ -300,10 +394,11 @@ public sealed class PdfDocument : IDisposable
     // ------------------------------------------------------------------
     // Save
     // ------------------------------------------------------------------
-    public byte[] SaveToBytes()
+    public byte[] SaveToBytes() => SaveHandleToBytes(_doc);
+
+    private static byte[] SaveHandleToBytes(IntPtr doc)
     {
         var ms = new MemoryStream();
-
         // Keep the delegate rooted for the duration of the call.
         WriteBlockFn writer = (ignored, data, size) =>
         {
@@ -317,13 +412,144 @@ public sealed class PdfDocument : IDisposable
             version = 1,
             WriteBlock = Marshal.GetFunctionPointerForDelegate(writer),
         };
-        bool ok = Pdfium.FPDF_SaveAsCopy(_doc, ref fw, Pdfium.FPDF_NO_INCREMENTAL);
+        bool ok = Pdfium.FPDF_SaveAsCopy(doc, ref fw, Pdfium.FPDF_NO_INCREMENTAL);
         GC.KeepAlive(writer);
         if (!ok) throw new InvalidOperationException("FPDF_SaveAsCopy failed");
         return ms.ToArray();
     }
 
     public void SaveToFile(string path) => File.WriteAllBytes(path, SaveToBytes());
+
+    // ------------------------------------------------------------------
+    // Page-tree operations
+    //
+    // In-place ops mutate the live doc (drive via PdfSession.Mutate).
+    // "ToBytes" producers build a fresh document and return its bytes
+    // (drive via PdfSession.MutateReplace, or write straight to a file).
+    // ------------------------------------------------------------------
+    public void RotatePages(IEnumerable<int> indices, int deltaDegrees)
+    {
+        int step = (((deltaDegrees / 90) % 4) + 4) % 4;
+        if (step == 0) return;
+        foreach (int i in indices.Distinct())
+        {
+            if (i < 0 || i >= PageCount) continue;
+            var page = Pdfium.FPDF_LoadPage(_doc, i);
+            if (page == IntPtr.Zero) continue;
+            try
+            {
+                int cur = Pdfium.FPDFPage_GetRotation(page);
+                Pdfium.FPDFPage_SetRotation(page, (cur + step) % 4);
+            }
+            finally { Pdfium.FPDF_ClosePage(page); }
+        }
+    }
+
+    public void DeletePages(IEnumerable<int> indices)
+    {
+        foreach (int i in indices.Distinct().OrderByDescending(x => x))
+            if (i >= 0 && i < PageCount)
+                Pdfium.FPDFPage_Delete(_doc, i);
+        PageCount = Pdfium.FPDF_GetPageCount(_doc);
+    }
+
+    public void InsertBlankPage(int at, double width = 595.0, double height = 842.0)
+    {
+        at = Math.Clamp(at, 0, PageCount);
+        var p = Pdfium.FPDFPage_New(_doc, at, width, height);
+        if (p != IntPtr.Zero) Pdfium.FPDF_ClosePage(p);
+        PageCount = Pdfium.FPDF_GetPageCount(_doc);
+    }
+
+    /// <summary>
+    /// Build a new document from this one using the given ordered list of
+    /// source page indices.  Repeats duplicate pages; a subset extracts;
+    /// a permutation reorders.  Returns the new document's bytes.
+    /// </summary>
+    public byte[] BuildFromPages(int[] pageOrder)
+    {
+        IntPtr dest = Pdfium.FPDF_CreateNewDocument();
+        if (dest == IntPtr.Zero) throw new InvalidOperationException("create doc failed");
+        try
+        {
+            if (!Pdfium.FPDF_ImportPagesByIndex(dest, _doc, pageOrder, (uint)pageOrder.Length, 0))
+                throw new InvalidOperationException("FPDF_ImportPagesByIndex failed");
+            return SaveHandleToBytes(dest);
+        }
+        finally { Pdfium.FPDF_CloseDocument(dest); }
+    }
+
+    public byte[] ReorderToBytes(int[] newOrder) => BuildFromPages(newOrder);
+
+    public byte[] DuplicatePagesToBytes(IEnumerable<int> indices)
+    {
+        var dup = new HashSet<int>(indices);
+        var order = new List<int>();
+        for (int i = 0; i < PageCount; i++)
+        {
+            order.Add(i);
+            if (dup.Contains(i)) order.Add(i);   // page then its copy
+        }
+        return BuildFromPages(order.ToArray());
+    }
+
+    public void ExtractPagesToFile(IEnumerable<int> indices, string path)
+    {
+        var order = indices.Where(i => i >= 0 && i < PageCount).Distinct().OrderBy(i => i).ToArray();
+        File.WriteAllBytes(path, BuildFromPages(order));
+    }
+
+    /// <summary>Write one file per (start,end) inclusive range. Returns paths.</summary>
+    public List<string> SplitToFiles(IEnumerable<(int start, int end)> ranges,
+        string outDir, string baseName)
+    {
+        var written = new List<string>();
+        int part = 1;
+        foreach (var (start, end) in ranges)
+        {
+            var order = Enumerable.Range(start, Math.Max(0, end - start + 1))
+                .Where(i => i >= 0 && i < PageCount).ToArray();
+            if (order.Length == 0) continue;
+            string path = Path.Combine(outDir, $"{baseName}_part{part}.pdf");
+            File.WriteAllBytes(path, BuildFromPages(order));
+            written.Add(path);
+            part++;
+        }
+        return written;
+    }
+
+    /// <summary>Concatenate several PDFs (given as byte arrays) into one.</summary>
+    public static unsafe byte[] MergeToBytes(IReadOnlyList<byte[]> sources)
+    {
+        EnsureLibrary();
+        IntPtr dest = Pdfium.FPDF_CreateNewDocument();
+        var pins = new List<GCHandle>();
+        var docs = new List<IntPtr>();
+        try
+        {
+            foreach (var bytes in sources)
+            {
+                var pin = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+                pins.Add(pin);
+                IntPtr sd = Pdfium.FPDF_LoadMemDocument((void*)pin.AddrOfPinnedObject(),
+                    bytes.Length, null);
+                if (sd == IntPtr.Zero) continue;
+                docs.Add(sd);
+                Pdfium.FPDF_ImportPagesByIndex(dest, sd, null, 0,
+                    Pdfium.FPDF_GetPageCount(dest));   // append all
+            }
+            return SaveHandleToBytes(dest);
+        }
+        finally
+        {
+            foreach (var sd in docs) Pdfium.FPDF_CloseDocument(sd);
+            foreach (var pin in pins) pin.Free();
+            Pdfium.FPDF_CloseDocument(dest);
+        }
+    }
+
+    public static byte[] MergeFilesToBytes(IEnumerable<string> paths)
+        => MergeToBytes(paths.Select(File.ReadAllBytes).ToList());
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate int WriteBlockFn(IntPtr pThis, IntPtr data, uint size);

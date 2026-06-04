@@ -4,6 +4,11 @@
     <ProjectReference Include="..\KittyPdf.Core\KittyPdf.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Resource Include="..\..\app\donate.png" Link="donate.png" />
+    <Resource Include="..\..\app\cat.png" Link="cat.png" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>

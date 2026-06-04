@@ -5,6 +5,50 @@
         WindowStartupLocation="CenterScreen"
         Background="#F3F3F3">
     <DockPanel>
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="文件(_F)">
+                <MenuItem Header="打开…" Click="OnOpen"/>
+                <MenuItem Header="保存" Click="OnSave"/>
+                <MenuItem Header="另存为…" Click="OnSaveAs"/>
+                <Separator/>
+                <MenuItem Header="退出" Click="OnExit"/>
+            </MenuItem>
+            <MenuItem Header="编辑(_E)">
+                <MenuItem Header="撤销" Click="OnUndo"/>
+                <MenuItem Header="重做" Click="OnRedo"/>
+                <Separator/>
+                <MenuItem x:Name="MenuEdit" Header="内容编辑模式" IsCheckable="True" Click="OnToggleEditMenu"/>
+            </MenuItem>
+            <MenuItem Header="页面(_P)">
+                <MenuItem Header="插入空白页…" Click="OnInsertBlank"/>
+                <MenuItem Header="删除页面…" Click="OnDeletePages"/>
+                <MenuItem Header="复制页面…" Click="OnDuplicatePages"/>
+                <Separator/>
+                <MenuItem Header="向左旋转 90°" Click="OnRotateLeft"/>
+                <MenuItem Header="向右旋转 90°" Click="OnRotateRight"/>
+                <Separator/>
+                <MenuItem Header="提取页面…" Click="OnExtractPages"/>
+                <MenuItem Header="重排页面…" Click="OnReorderPages"/>
+            </MenuItem>
+            <MenuItem Header="文档(_D)">
+                <MenuItem Header="合并 PDF…" Click="OnMerge"/>
+                <MenuItem Header="拆分 PDF…" Click="OnSplit"/>
+                <Separator/>
+                <MenuItem Header="添加文字水印…" Click="OnWatermark"/>
+                <MenuItem Header="添加页码…" Click="OnPageNumbers"/>
+            </MenuItem>
+            <MenuItem Header="工具(_T)">
+                <MenuItem Header="搜索…" Click="OnSearch"/>
+            </MenuItem>
+            <MenuItem Header="导出(_X)">
+                <MenuItem Header="导出文本…" Click="OnExportText"/>
+                <MenuItem Header="导出每页图片…" Click="OnExportImages"/>
+            </MenuItem>
+            <MenuItem Header="帮助(_H)">
+                <MenuItem Header="关于" Click="OnAbout"/>
+                <MenuItem Header="赞赏支持" Click="OnDonate"/>
+            </MenuItem>
+        </Menu>
         <ToolBarTray DockPanel.Dock="Top" Background="#FFFFFF">
             <ToolBar Band="0" ClipToBounds="False">
                 <Button x:Name="BtnOpen" Content="打开" Click="OnOpen" Padding="10,4" Margin="2,0"/>

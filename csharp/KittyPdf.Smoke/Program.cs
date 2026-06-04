@@ -50,6 +50,18 @@ if (args.Length >= 1 && File.Exists(args[0]))
         return 0;
     }
 
+    // `<pdf> wm <text>` — add a CJK-capable watermark + page numbers and
+    // write <pdf>.wm.pdf (for visual CID-font verification).
+    if (args.Length >= 3 && args[1] == "wm")
+    {
+        using var doc = PdfDocument.Open(args[0]);
+        doc.AddTextWatermark(args[2]);
+        doc.AddPageNumbers("{page} / {total}");
+        doc.SaveToFile(args[0] + ".wm.pdf");
+        Console.WriteLine("wrote " + args[0] + ".wm.pdf");
+        return 0;
+    }
+
     using var d2 = PdfDocument.Open(args[0]);
     Console.WriteLine($"pages={d2.PageCount}  file={args[0]}");
     for (int p = 0; p < d2.PageCount; p++)
@@ -140,6 +152,93 @@ using (var d = PdfDocument.Load(deleted))
 {
     var texts = d.GetElements(0).Where(e => e.Kind == PdfElementKind.Text).ToList();
     Check(texts.Count == 0, $"DELETE removed the text object (remaining: {texts.Count})");
+}
+
+// ---- Page operations. ----
+byte[] ThreePageDoc()
+{
+    var pages = new List<byte[]>
+    {
+        MakeDoc("Helvetica", "PAGE-A", 50, 100),
+        MakeDoc("Helvetica", "PAGE-B", 50, 100),
+        MakeDoc("Helvetica", "PAGE-C", 50, 100),
+    };
+    return PdfDocument.MergeToBytes(pages);
+}
+
+byte[] three = ThreePageDoc();
+using (var d = PdfDocument.Load(three))
+    Check(d.PageCount == 3, $"merge 3 single-page docs → 3 pages (got {d.PageCount})");
+
+// Delete middle page.
+using (var d = PdfDocument.Load(three))
+{
+    d.DeletePages(new[] { 1 });
+    Check(d.PageCount == 2, $"delete page → 2 pages (got {d.PageCount})");
+    var t0 = d.GetElements(0).First(e => e.Kind == PdfElementKind.Text).Text;
+    var t1 = d.GetElements(1).First(e => e.Kind == PdfElementKind.Text).Text;
+    Check(t0 == "PAGE-A" && t1 == "PAGE-C", $"remaining pages are A,C (got {t0},{t1})");
+}
+
+// Insert blank page at index 1.
+using (var d = PdfDocument.Load(three))
+{
+    d.InsertBlankPage(1, 300, 300);
+    Check(d.PageCount == 4, $"insert blank → 4 pages (got {d.PageCount})");
+}
+
+// Reorder C,A,B.
+using (var d = PdfDocument.Load(three))
+{
+    var bytes = d.ReorderToBytes(new[] { 2, 0, 1 });
+    using var r = PdfDocument.Load(bytes);
+    var order = Enumerable.Range(0, r.PageCount)
+        .Select(p => r.GetElements(p).First(e => e.Kind == PdfElementKind.Text).Text).ToArray();
+    Check(string.Join(",", order) == "PAGE-C,PAGE-A,PAGE-B", $"reorder → C,A,B (got {string.Join(",", order)})");
+}
+
+// Duplicate page 0.
+using (var d = PdfDocument.Load(three))
+{
+    var bytes = d.DuplicatePagesToBytes(new[] { 0 });
+    using var r = PdfDocument.Load(bytes);
+    Check(r.PageCount == 4, $"duplicate page 0 → 4 pages (got {r.PageCount})");
+}
+
+// Rotate page 0 by 90.
+using (var d = PdfDocument.Load(three))
+{
+    d.RotatePages(new[] { 0 }, 90);
+    var bytes = d.SaveToBytes();
+    using var r = PdfDocument.Load(bytes);
+    // (no direct rotation getter in managed API; just assert it round-trips)
+    Check(r.PageCount == 3, "rotate round-trips without page loss");
+}
+
+// ---- Text extraction + search. ----
+using (var d = PdfDocument.Load(three))
+{
+    string all = d.GetAllText();
+    Check(all.Contains("PAGE-A") && all.Contains("PAGE-C"), "GetAllText returns page text");
+    var hits = d.Search("PAGE-B");
+    Check(hits.Count == 1 && hits[0].Page == 1, $"search finds PAGE-B on page 1 (got {hits.Count} hits)");
+}
+
+// ---- Page numbers + watermark add text. ----
+using (var d = PdfDocument.Load(three))
+{
+    d.AddPageNumbers("{page} / {total}");
+    var bytes = d.SaveToBytes();
+    using var r = PdfDocument.Load(bytes);
+    string t0 = r.GetPageText(0);
+    Check(t0.Contains("1") && t0.Contains("3"), $"page-number text present (page0='{t0.Replace("\n", " ").Trim()}')");
+}
+using (var d = PdfDocument.Load(three))
+{
+    d.AddTextWatermark("DRAFT");
+    var bytes = d.SaveToBytes();
+    using var r = PdfDocument.Load(bytes);
+    Check(r.GetPageText(0).Contains("DRAFT"), "watermark text present on page 0");
 }
 
 Console.WriteLine();

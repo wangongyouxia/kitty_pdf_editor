@@ -85,6 +85,25 @@ internal static unsafe class Pdfium
     public static extern int FPDF_GetPageCount(IntPtr document);
 
     // ------------------------------------------------------------------
+    // Page tree operations (delete / import / rotate)
+    // ------------------------------------------------------------------
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern void FPDFPage_Delete(IntPtr document, int page_index);
+
+    // Import selected pages from src into dest at insert_index.
+    // page_indices == null imports ALL pages.
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDF_ImportPagesByIndex(IntPtr dest_doc, IntPtr src_doc,
+        int[]? page_indices, uint length, int index);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern int FPDFPage_GetRotation(IntPtr page);
+
+    // rotate: 0=0°, 1=90°, 2=180°, 3=270° (clockwise)
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern void FPDFPage_SetRotation(IntPtr page, int rotate);
+
+    // ------------------------------------------------------------------
     // Page
     // ------------------------------------------------------------------
     [DllImport(Dll, CallingConvention = Conv)]
@@ -172,6 +191,14 @@ internal static unsafe class Pdfium
     public static extern IntPtr FPDFPageObj_NewTextObj(IntPtr document,
         [MarshalAs(UnmanagedType.LPStr)] string font, float font_size);
 
+    // font_type: 1 = Type1, 2 = TrueType.  cid=true for CJK (CIDFont).
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern IntPtr FPDFText_LoadFont(IntPtr document, byte* data, uint size,
+        int font_type, bool cid);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern IntPtr FPDFPageObj_CreateTextObj(IntPtr document, IntPtr font, float font_size);
+
     // text is UTF-16LE, NUL-terminated.
     [DllImport(Dll, CallingConvention = Conv, CharSet = CharSet.Unicode)]
     public static extern bool FPDFText_SetText(IntPtr text_object,
@@ -216,6 +243,31 @@ internal static unsafe class Pdfium
 
     [DllImport(Dll, CallingConvention = Conv)]
     public static extern void FPDFText_ClosePage(IntPtr text_page);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern int FPDFText_CountChars(IntPtr text_page);
+
+    // Writes up to count UTF-16 units into result (NUL-terminated). Returns
+    // number of units written.
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern int FPDFText_GetText(IntPtr text_page, int start, int count, ushort* result);
+
+    // ---- Search ----
+    [DllImport(Dll, CallingConvention = Conv, CharSet = CharSet.Unicode)]
+    public static extern IntPtr FPDFText_FindStart(IntPtr text_page,
+        [MarshalAs(UnmanagedType.LPWStr)] string findwhat, uint flags, int start_index);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern bool FPDFText_FindNext(IntPtr handle);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern int FPDFText_GetSchResultIndex(IntPtr handle);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern int FPDFText_GetSchCount(IntPtr handle);
+
+    [DllImport(Dll, CallingConvention = Conv)]
+    public static extern void FPDFText_FindClose(IntPtr handle);
 
     // ------------------------------------------------------------------
     // Save

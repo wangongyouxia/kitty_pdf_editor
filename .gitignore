@@ -18,6 +18,9 @@ csharp/*.png
 csharp/sample_*.pdf
 csharp/out_*.pdf
 
+# Publish output (single-file exe is huge — don't track)
+csharp/publish/
+
 # Editor / OS junk
 .vscode/
 .idea/

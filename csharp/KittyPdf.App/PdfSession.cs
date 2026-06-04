@@ -79,6 +79,22 @@ public sealed class PdfSession : IDisposable
         SetDirty(true);
     }
 
+    /// <summary>
+    /// Like <see cref="Mutate"/> but for operations that build a brand-new
+    /// document (reorder, duplicate, merge-into-current): the producer
+    /// returns the replacement bytes.
+    /// </summary>
+    public void MutateReplace(Func<PdfDocument, byte[]> produce)
+    {
+        if (_doc == null) return;
+        byte[] before = _doc.SaveToBytes();
+        byte[] after = produce(_doc);
+        _undo.Push(before);
+        _redo.Clear();
+        ReloadFrom(after);
+        SetDirty(true);
+    }
+
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
 
