@@ -8,6 +8,11 @@ build/
 dist/
 *.spec.bak
 
+# .NET / C#
+csharp/**/bin/
+csharp/**/obj/
+*.user
+
 # Editor / OS junk
 .vscode/
 .idea/
